@@ -1,0 +1,55 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+build/
+
+# Environment variables (never commit secrets)
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Vite
+*.local
+vite.config.ts.timestamp-*
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data files (Excel sheets with student data)
+*.xlsx
+*.xls
+*.csv
+
+# Python scripts used for data upload
+*.py
+
+# SQL files
+*.sql
+
+# Cache
+.cache/
+.parcel-cache/
