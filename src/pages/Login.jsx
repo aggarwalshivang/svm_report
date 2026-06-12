@@ -2,9 +2,6 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 
-const TEACHER_EMAILS = ['admin@saraswatividyamandir.com', 'aggarwal.shivang@gmail.com']
-const TEACHER_PASSWORD = 'shivang123'
-
 export default function Login() {
   const navigate = useNavigate()
   const [role, setRole] = useState('student')
@@ -12,6 +9,8 @@ export default function Login() {
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [forgotMode, setForgotMode] = useState(false)
+  const [resetSent, setResetSent] = useState(false)
 
   async function handleLogin(e) {
     e.preventDefault()
@@ -19,17 +18,16 @@ export default function Login() {
     setLoading(true)
 
     if (role === 'teacher') {
-      if (!TEACHER_EMAILS.includes(email.trim().toLowerCase())) {
-        setError('Email not recognised as a teacher account.')
+      const { data, error: authErr } = await supabase.auth.signInWithPassword({
+        email: email.trim().toLowerCase(),
+        password,
+      })
+      if (authErr) {
+        setError('Invalid email or password.')
         setLoading(false)
         return
       }
-      if (password !== TEACHER_PASSWORD) {
-        setError('Incorrect password.')
-        setLoading(false)
-        return
-      }
-      localStorage.setItem('svm_session', JSON.stringify({ role: 'teacher', email }))
+      localStorage.setItem('svm_session', JSON.stringify({ role: 'teacher', email: data.user.email }))
       navigate('/teacher')
       return
     }
@@ -67,6 +65,19 @@ export default function Login() {
     navigate('/student')
   }
 
+  async function handleForgotPassword(e) {
+    e.preventDefault()
+    setError('')
+    setLoading(true)
+    const { error: resetErr } = await supabase.auth.resetPasswordForEmail(
+      email.trim().toLowerCase(),
+      { redirectTo: `${window.location.origin}/reset-password` }
+    )
+    setLoading(false)
+    if (resetErr) { setError('Could not send reset email. Check the address and try again.'); return }
+    setResetSent(true)
+  }
+
   return (
     <div className="min-h-screen flex items-center justify-center p-4" style={{ background: 'linear-gradient(135deg, #1a0800 0%, #3d1a00 60%, #2a1000 100%)' }}>
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-5 sm:p-8">
@@ -100,65 +111,130 @@ export default function Login() {
           ))}
         </div>
 
-        <form onSubmit={handleLogin} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Email Address
-            </label>
-            <input
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder={role === 'student' ? 'your@gmail.com' : 'admin@saraswatividyamandir.com'}
-              className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 text-gray-800"
-              style={{ '--tw-ring-color': '#c8860a' }}
-              onFocus={(e) => e.target.style.boxShadow = '0 0 0 2px #c8860a40'}
-              onBlur={(e) => e.target.style.boxShadow = ''}
-            />
-          </div>
-
-          {role === 'teacher' && (
+        {forgotMode ? (
+          resetSent ? (
+            <div className="text-center space-y-4">
+              <div className="w-14 h-14 rounded-full flex items-center justify-center mx-auto" style={{ background: '#fef3d0' }}>
+                <span className="text-2xl">📧</span>
+              </div>
+              <p className="font-semibold text-gray-800">Reset link sent!</p>
+              <p className="text-sm text-gray-500">Check <span className="font-medium">{email}</span> for the password reset link.</p>
+              <button
+                onClick={() => { setForgotMode(false); setResetSent(false); setError('') }}
+                className="text-sm font-medium"
+                style={{ color: '#c8860a' }}
+              >
+                ← Back to Login
+              </button>
+            </div>
+          ) : (
+            <form onSubmit={handleForgotPassword} className="space-y-4">
+              <p className="text-sm text-gray-500">Enter your teacher email and we'll send a password reset link.</p>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Teacher Email</label>
+                <input
+                  type="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="admin@saraswatividyamandir.com"
+                  className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:outline-none text-gray-800"
+                  onFocus={(e) => e.target.style.boxShadow = '0 0 0 2px #c8860a40'}
+                  onBlur={(e) => e.target.style.boxShadow = ''}
+                />
+              </div>
+              {error && (
+                <div className="bg-red-50 border border-red-200 text-red-600 rounded-lg px-4 py-3 text-sm">{error}</div>
+              )}
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full text-white font-semibold py-3 rounded-lg transition-all"
+                style={{ background: loading ? '#a06d08' : '#c8860a' }}
+                onMouseEnter={(e) => { if (!loading) e.target.style.background = '#a06d08' }}
+                onMouseLeave={(e) => { if (!loading) e.target.style.background = '#c8860a' }}
+              >
+                {loading ? 'Sending…' : 'Send Reset Link'}
+              </button>
+              <button
+                type="button"
+                onClick={() => { setForgotMode(false); setError('') }}
+                className="w-full text-sm font-medium py-2"
+                style={{ color: '#c8860a' }}
+              >
+                ← Back to Login
+              </button>
+            </form>
+          )
+        ) : (
+          <form onSubmit={handleLogin} className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Password
+                Email Address
               </label>
               <input
-                type="password"
+                type="email"
                 required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter password"
-                className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:outline-none text-gray-800"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder={role === 'student' ? 'your@gmail.com' : 'admin@saraswatividyamandir.com'}
+                className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 text-gray-800"
+                style={{ '--tw-ring-color': '#c8860a' }}
                 onFocus={(e) => e.target.style.boxShadow = '0 0 0 2px #c8860a40'}
                 onBlur={(e) => e.target.style.boxShadow = ''}
               />
             </div>
-          )}
 
-          {role === 'student' && (
-            <p className="text-xs text-gray-400">
-              Enter the email address linked to your account. No password required.
-            </p>
-          )}
+            {role === 'teacher' && (
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-sm font-medium text-gray-700">Password</label>
+                  <button
+                    type="button"
+                    onClick={() => { setForgotMode(true); setError('') }}
+                    className="text-xs font-medium"
+                    style={{ color: '#c8860a' }}
+                  >
+                    Forgot password?
+                  </button>
+                </div>
+                <input
+                  type="password"
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Enter password"
+                  className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:outline-none text-gray-800"
+                  onFocus={(e) => e.target.style.boxShadow = '0 0 0 2px #c8860a40'}
+                  onBlur={(e) => e.target.style.boxShadow = ''}
+                />
+              </div>
+            )}
 
-          {error && (
-            <div className="bg-red-50 border border-red-200 text-red-600 rounded-lg px-4 py-3 text-sm">
-              {error}
-            </div>
-          )}
+            {role === 'student' && (
+              <p className="text-xs text-gray-400">
+                Enter the email address linked to your account. No password required.
+              </p>
+            )}
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full text-white font-semibold py-3 rounded-lg transition-all"
-            style={{ background: loading ? '#a06d08' : '#c8860a' }}
-            onMouseEnter={(e) => { if (!loading) e.target.style.background = '#a06d08' }}
-            onMouseLeave={(e) => { if (!loading) e.target.style.background = '#c8860a' }}
-          >
-            {loading ? 'Checking…' : 'Login'}
-          </button>
-        </form>
+            {error && (
+              <div className="bg-red-50 border border-red-200 text-red-600 rounded-lg px-4 py-3 text-sm">
+                {error}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full text-white font-semibold py-3 rounded-lg transition-all"
+              style={{ background: loading ? '#a06d08' : '#c8860a' }}
+              onMouseEnter={(e) => { if (!loading) e.target.style.background = '#a06d08' }}
+              onMouseLeave={(e) => { if (!loading) e.target.style.background = '#c8860a' }}
+            >
+              {loading ? 'Checking…' : 'Login'}
+            </button>
+          </form>
+        )}
       </div>
     </div>
   )

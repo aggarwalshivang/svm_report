@@ -34,7 +34,8 @@ export default function TeacherDashboard() {
     load()
   }, [])
 
-  function logout() {
+  async function logout() {
+    await supabase.auth.signOut()
     localStorage.removeItem('svm_session')
     navigate('/')
   }
