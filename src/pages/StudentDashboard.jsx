@@ -43,22 +43,20 @@ export default function StudentDashboard() {
 
       if (!classmates?.length) return
       setClassSize(classmates.length)
-      if (!allScores?.length) return
 
-      // Use a Set of stringified IDs to avoid any type-mismatch issues
-      const classmateIds = new Set(classmates.map((s) => String(s.student_id)).filter(Boolean))
+      // Build avg map — default every classmate to 0
+      const classmateIds = classmates.map((s) => String(s.student_id)).filter(Boolean)
+      const avgMap = Object.fromEntries(classmateIds.map((id) => [id, { total: 0, count: 0 }]))
 
-      const avgMap = {}
-      allScores.forEach((r) => {
+      ;(allScores || []).forEach((r) => {
         const key = String(r.student_id)
-        if (!classmateIds.has(key) || r.is_absent) return
-        if (!avgMap[key]) avgMap[key] = { total: 0, count: 0 }
+        if (!avgMap[key] || r.is_absent) return
         avgMap[key].total += (r.score_obtained / r.total_marks) * 100
         avgMap[key].count += 1
       })
 
       const ranked = Object.entries(avgMap)
-        .map(([id, d]) => ({ id, avg: d.total / d.count }))
+        .map(([id, d]) => ({ id, avg: d.count > 0 ? d.total / d.count : 0 }))
         .sort((a, b) => b.avg - a.avg)
 
       const pos = ranked.findIndex((r) => r.id === String(session.studentId))
@@ -189,8 +187,8 @@ export default function StudentDashboard() {
           <StatCard label="Best Subject" value={bestSubject}        sub={bestSubject === 'Science' ? `${sciAvg}% avg` : `${mathAvg}% avg`} type="brown" />
           <StatCard
             label="Class Rank"
-            value={classRank ? `#${classRank}` : classSize !== null ? '—' : '…'}
-            sub={classSize !== null ? (classRank ? `out of ${classSize} in Class ${session?.class}` : 'No tests scored yet') : 'Computing…'}
+            value={classRank != null ? `#${classRank}` : classSize !== null ? '—' : '…'}
+            sub={classSize !== null ? `out of ${classSize} in Class ${session?.class}` : 'Computing…'}
             type="rank"
           />
         </div>
