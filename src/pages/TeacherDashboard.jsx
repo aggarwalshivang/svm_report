@@ -1,8 +1,8 @@
 import { useEffect, useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine,
-  ResponsiveContainer, LineChart, Line, Cell,
+  ComposedChart, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
+  ReferenceLine, ResponsiveContainer, LineChart, Line, Cell, Legend,
 } from 'recharts'
 import { supabase } from '../lib/supabase'
 
@@ -23,6 +23,9 @@ export default function TeacherDashboard() {
   const [view, setView] = useState('students') // 'students' | 'tests'
   const [sending, setSending] = useState(null)
   const [sendResult, setSendResult] = useState(null)
+  const [sentReports, setSentReports] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('svm_sent_reports') || '{}') } catch { return {} }
+  })
 
   useEffect(() => {
     async function load() {
@@ -89,6 +92,29 @@ export default function TeacherDashboard() {
     ? (withData.reduce((a, s) => a + Number(s.avgPct), 0) / withData.length).toFixed(1)
     : 'N/A'
 
+  const chapterStats = useMemo(() => {
+    const scopeIds = new Set(scope.map((s) => s.student_id))
+    const map = {}
+    allScores.forEach((r) => {
+      if (!scopeIds.has(r.student_id) || r.is_absent) return
+      const key = `${r.subject}||${r.topic_name}`
+      if (!map[key]) map[key] = { subject: r.subject, topic: r.topic_name, total: 0, count: 0, tests: new Set(), best: 0, worst: 100 }
+      const pct = (r.score_obtained / r.total_marks) * 100
+      map[key].total += pct
+      map[key].count += 1
+      map[key].tests.add(`${r.date}|${r.topic_name}|${r.total_marks}`)
+      map[key].best  = Math.max(map[key].best, pct)
+      map[key].worst = Math.min(map[key].worst, pct)
+    })
+    return Object.values(map).map((t) => ({
+      ...t,
+      avg:   +( t.total / t.count).toFixed(1),
+      best:  +t.best.toFixed(1),
+      worst: +t.worst.toFixed(1),
+      testCount: t.tests.size,
+    })).sort((a, b) => b.avg - a.avg)
+  }, [allScores, scope])
+
   const uniqueTests = useMemo(() => {
     const studentMap = Object.fromEntries(students.map((s) => [s.student_id, s]))
     const map = {}
@@ -132,6 +158,11 @@ export default function TeacherDashboard() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: generateMessage(test), class: String(test.class) }),
       })
+      if (res.ok) {
+        const updated = { ...sentReports, [test.key]: new Date().toISOString() }
+        setSentReports(updated)
+        localStorage.setItem('svm_sent_reports', JSON.stringify(updated))
+      }
       setSendResult({ key: test.key, success: res.ok })
     } catch {
       setSendResult({ key: test.key, success: false })
@@ -184,7 +215,7 @@ export default function TeacherDashboard() {
         <div className="flex flex-wrap gap-2 items-center">
           {/* View toggle */}
           <div className="flex bg-white rounded-lg border p-1 gap-1">
-            {[{ k: 'students', label: '👥 Students' }, { k: 'tests', label: '📋 Tests' }].map(({ k, label }) => (
+            {[{ k: 'students', label: '👥 Students' }, { k: 'analysis', label: '📊 Analysis' }, { k: 'tests', label: '📋 Tests' }].map(({ k, label }) => (
               <button key={k} onClick={() => setView(k)}
                 className="px-3 py-1.5 rounded-md text-sm font-medium transition"
                 style={view === k ? { background: NAV, color: GOLD } : { color: '#6b4c1e' }}
@@ -219,6 +250,95 @@ export default function TeacherDashboard() {
             {view === 'students' ? `${filtered.length} students` : `${filteredTests.length} tests`}
           </span>
         </div>
+
+        {/* Analysis view */}
+        {view === 'analysis' && (() => {
+          const sciChapters   = chapterStats.filter((t) => t.subject === 'Science')
+          const mathChapters  = chapterStats.filter((t) => t.subject === 'Maths')
+          const strongChapters   = chapterStats.filter((t) => t.avg >= 80).sort((a, b) => b.avg - a.avg)
+          const moderateChapters = chapterStats.filter((t) => t.avg >= 60 && t.avg < 80).sort((a, b) => b.avg - a.avg)
+          const weakChapters     = chapterStats.filter((t) => t.avg < 60).sort((a, b) => a.avg - b.avg)
+
+          return (
+            <div className="space-y-5">
+              {/* Charts */}
+              <div className="grid md:grid-cols-2 gap-4">
+                {[{ label: 'Science', color: '#16a34a', data: sciChapters }, { label: 'Maths', color: '#c8860a', data: mathChapters }].map(({ label, color, data }) =>
+                  data.length > 0 && (
+                    <div key={label} className="bg-white rounded-xl shadow p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <p className="text-sm font-semibold" style={{ color }}>{label} — Chapter Analysis</p>
+                        <div className="flex items-center gap-2 text-[10px] text-gray-400 flex-wrap">
+                          <span><span className="inline-block w-3 h-2 rounded-sm mr-1" style={{ background: '#16a34a' }} />≥80%</span>
+                          <span><span className="inline-block w-3 h-2 rounded-sm mr-1" style={{ background: '#c8860a' }} />60–79%</span>
+                          <span><span className="inline-block w-3 h-2 rounded-sm mr-1" style={{ background: '#ef4444' }} />&lt;60%</span>
+                          <span className="border-l pl-2">line = tests</span>
+                        </div>
+                      </div>
+                      <ChapterBarChart topics={data.map((t) => ({ ...t, count: t.testCount }))} />
+                    </div>
+                  )
+                )}
+              </div>
+
+              {/* Strong / Moderate / Weak tables */}
+              {[
+                { label: '🏆 Strong Chapters', data: strongChapters,   type: 'strong',   empty: 'No chapters above 80% yet.' },
+                { label: '🟡 Moderate Chapters', data: moderateChapters, type: 'moderate', empty: 'No moderate chapters.' },
+                { label: '⚠️ Weak Chapters',   data: weakChapters,     type: 'weak',     empty: 'No weak chapters — great work!' },
+              ].map(({ label, data, type, empty }) => (
+                <div key={type} className="bg-white rounded-xl shadow overflow-hidden">
+                  <div className="px-5 py-3 border-b" style={{ background: type === 'strong' ? '#f0fdf4' : type === 'moderate' ? '#fffbeb' : '#fef2f2' }}>
+                    <p className="text-sm font-semibold" style={{ color: type === 'strong' ? '#166534' : type === 'moderate' ? '#92400e' : '#991b1b' }}>{label} ({data.length})</p>
+                  </div>
+                  {data.length === 0
+                    ? <p className="text-sm text-gray-400 py-6 text-center">{empty}</p>
+                    : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="text-left text-xs text-gray-500 uppercase" style={{ background: type === 'strong' ? '#f0fdf4' : type === 'moderate' ? '#fffbeb' : '#fef2f2' }}>
+                              <th className="px-5 py-2">Chapter / Topic</th>
+                              <th className="px-5 py-2">Subject</th>
+                              <th className="px-5 py-2 text-center">Tests</th>
+                              <th className="px-5 py-2 text-center">Class Avg %</th>
+                              <th className="px-5 py-2 text-center">Best</th>
+                              <th className="px-5 py-2 text-center">Worst</th>
+                              <th className="px-5 py-2">Progress</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-50">
+                            {data.map((t) => {
+                              const barColor = type === 'strong' ? '#16a34a' : type === 'moderate' ? '#c8860a' : '#ef4444'
+                              const textColor = type === 'strong' ? 'text-green-700' : type === 'moderate' ? 'text-amber-600' : 'text-red-600'
+                              return (
+                                <tr key={`${t.subject}-${t.topic}`} className={type === 'strong' ? 'hover:bg-green-50' : type === 'moderate' ? 'hover:bg-amber-50' : 'hover:bg-red-50'}>
+                                  <td className="px-5 py-2 font-medium text-gray-800 text-xs">{t.topic}</td>
+                                  <td className="px-5 py-2">
+                                    <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${t.subject === 'Science' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>{t.subject}</span>
+                                  </td>
+                                  <td className="px-5 py-2 text-center text-gray-600 text-xs">{t.testCount}</td>
+                                  <td className="px-5 py-2 text-center"><span className={`font-bold text-sm ${textColor}`}>{t.avg}%</span></td>
+                                  <td className="px-5 py-2 text-center text-green-600 font-medium text-xs">{t.best}%</td>
+                                  <td className="px-5 py-2 text-center text-red-500 font-medium text-xs">{t.worst}%</td>
+                                  <td className="px-5 py-2 w-28">
+                                    <div className="w-full bg-gray-100 rounded-full h-1.5">
+                                      <div className="h-1.5 rounded-full" style={{ width: `${t.avg}%`, background: barColor }} />
+                                    </div>
+                                  </td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )
+                  }
+                </div>
+              ))}
+            </div>
+          )
+        })()}
 
         {/* Tests table */}
         {view === 'tests' && (
@@ -261,18 +381,26 @@ export default function TeacherDashboard() {
                           <span className={`font-semibold text-xs ${topCount > 0 ? 'text-green-600' : 'text-gray-400'}`}>{topCount}</span>
                         </td>
                         <td className="px-4 py-3 text-center">
-                          {result ? (
-                            <span className={`text-xs font-medium ${result.success ? 'text-green-600' : 'text-red-500'}`}>
-                              {result.success ? '✓ Sent' : '✗ Failed'}
-                            </span>
+                          {isSending ? (
+                            <span className="text-xs text-amber-600 font-medium">Sending…</span>
+                          ) : result && !result.success ? (
+                            <div className="flex flex-col items-center gap-1">
+                              <span className="text-xs text-red-500 font-medium">✗ Failed</span>
+                              <button onClick={() => sendReport(t)} className="text-xs font-medium" style={{ color: GOLD }}>Retry</button>
+                            </div>
+                          ) : sentReports[t.key] ? (
+                            <div className="flex flex-col items-center gap-1">
+                              <span className="text-xs text-green-600 font-semibold">✓ Sent</span>
+                              <span className="text-[10px] text-gray-400">{new Date(sentReports[t.key]).toLocaleDateString('en-US', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+                              <button onClick={() => sendReport(t)} className="text-[10px] font-medium px-2 py-0.5 rounded border" style={{ color: GOLD, borderColor: GOLD }}>↺ Re-send</button>
+                            </div>
                           ) : (
                             <button
                               onClick={() => sendReport(t)}
-                              disabled={isSending}
                               className="text-xs font-semibold px-3 py-1.5 rounded-lg text-white transition"
-                              style={{ background: isSending ? '#a06d08' : GOLD }}
+                              style={{ background: GOLD }}
                             >
-                              {isSending ? 'Sending…' : '📤 Send'}
+                              📤 Send
                             </button>
                           )}
                         </td>
@@ -630,10 +758,14 @@ function StudentDetailModal({ student, scores, onClose }) {
                 {topicStats.length === 0
                   ? <p className="text-sm text-gray-400 py-4 text-center">No chapter data yet.</p>
                   : <>
-                      <div className="flex items-center gap-4 text-xs mb-1">
+                      <div className="flex flex-wrap items-center gap-3 text-xs mb-2">
                         <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ background: '#16a34a' }} /> Strong ≥80%</span>
                         <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ background: '#c8860a' }} /> Moderate 60–79%</span>
                         <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ background: '#ef4444' }} /> Weak &lt;60%</span>
+                        <span className="flex items-center gap-1 ml-2 border-l pl-3 border-gray-200">
+                          <span className="inline-block w-5 border-t-2 border-dashed" style={{ borderColor: NAV }} />
+                          <span className="text-gray-500">— line = no. of tests (right axis)</span>
+                        </span>
                       </div>
                       {sciTopics.length > 0 && (
                         <div>
@@ -749,42 +881,78 @@ function ModalTopicTable({ topics, type }) {
 
 function ChapterBarChart({ topics }) {
   const data = topics.map((t) => ({
-    topic: t.topic.length > 22 ? t.topic.slice(0, 22) + '…' : t.topic,
+    topic: t.topic.length > 18 ? t.topic.slice(0, 18) + '…' : t.topic,
+    fullTopic: t.topic,
     avg: t.avg,
     count: t.count,
+    best: t.best,
+    worst: t.worst,
     fill: t.avg >= 80 ? '#16a34a' : t.avg >= 60 ? '#c8860a' : '#ef4444',
   }))
+
+  const maxCount = Math.max(...data.map((d) => d.count), 1)
+
   return (
-    <ResponsiveContainer width="100%" height={Math.max(100, data.length * 38)}>
-      <BarChart data={data} layout="vertical" margin={{ top: 0, right: 60, left: 0, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f0ebe4" />
-        <XAxis type="number" domain={[0, 100]} tick={{ fontSize: 10 }} unit="%" />
-        <YAxis type="category" dataKey="topic" tick={{ fontSize: 10 }} width={150} />
+    <ResponsiveContainer width="100%" height={Math.max(220, data.length * 52 + 60)}>
+      <ComposedChart data={data} margin={{ top: 16, right: 50, left: 0, bottom: 60 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#f0ebe4" />
+        <XAxis
+          dataKey="topic"
+          tick={{ fontSize: 10 }}
+          angle={-35}
+          textAnchor="end"
+          interval={0}
+          height={70}
+        />
+        <YAxis
+          yAxisId="pct"
+          domain={[0, 100]}
+          tick={{ fontSize: 10 }}
+          unit="%"
+          label={{ value: 'Avg %', angle: -90, position: 'insideLeft', fontSize: 10, fill: '#9ca3af', offset: 10 }}
+        />
+        <YAxis
+          yAxisId="cnt"
+          orientation="right"
+          domain={[0, maxCount + 1]}
+          tick={{ fontSize: 10 }}
+          allowDecimals={false}
+          label={{ value: 'Tests', angle: 90, position: 'insideRight', fontSize: 10, fill: '#9ca3af', offset: 10 }}
+        />
         <Tooltip
-          formatter={(v, _name, props) => [`${v}%`, 'Avg']}
           content={({ active, payload }) => {
             if (!active || !payload?.length) return null
             const d = payload[0].payload
             return (
-              <div className="bg-white border border-gray-200 rounded-lg px-3 py-2 text-xs shadow">
-                <p className="font-semibold text-gray-700 mb-1">{d.topic}</p>
-                <p style={{ color: d.fill }}>Avg: {d.avg}%</p>
-                <p className="text-gray-500">Exams: {d.count}</p>
+              <div className="bg-white border border-gray-200 rounded-lg px-3 py-2 text-xs shadow space-y-0.5">
+                <p className="font-semibold text-gray-800 mb-1">{d.fullTopic}</p>
+                <p style={{ color: d.fill }}>Avg: <strong>{d.avg}%</strong></p>
+                <p className="text-gray-500">Tests taken: <strong>{d.count}</strong></p>
+                <p className="text-green-600">Best: {d.best}%</p>
+                <p className="text-red-500">Worst: {d.worst}%</p>
               </div>
             )
           }}
         />
-        <ReferenceLine x={80} stroke="#16a34a" strokeDasharray="4 3" strokeWidth={1} />
-        <ReferenceLine x={60} stroke="#c8860a" strokeDasharray="4 3" strokeWidth={1} />
-        <Bar dataKey="avg" radius={[0, 4, 4, 0]}
-          label={(props) => {
-            const { x, y, width, height, index } = props
-            return <text x={x + width + 6} y={y + height / 2 + 4} fontSize={10} fill="#6b7280">{data[index].count}x</text>
-          }}
+        <ReferenceLine yAxisId="pct" y={80} stroke="#16a34a" strokeDasharray="4 3" strokeWidth={1}
+          label={{ value: '80%', position: 'insideTopRight', fontSize: 9, fill: '#16a34a' }} />
+        <ReferenceLine yAxisId="pct" y={60} stroke="#c8860a" strokeDasharray="4 3" strokeWidth={1}
+          label={{ value: '60%', position: 'insideTopRight', fontSize: 9, fill: '#c8860a' }} />
+        <Bar yAxisId="pct" dataKey="avg" radius={[4, 4, 0, 0]}
+          label={{ position: 'top', fontSize: 9, fill: '#6b7280', formatter: (v) => `${v}%` }}
         >
           {data.map((entry, i) => <Cell key={i} fill={entry.fill} />)}
         </Bar>
-      </BarChart>
+        <Line
+          yAxisId="cnt"
+          type="monotone"
+          dataKey="count"
+          stroke={NAV}
+          strokeWidth={2}
+          dot={{ fill: NAV, r: 4, strokeWidth: 0 }}
+          label={{ position: 'top', fontSize: 9, fill: NAV, formatter: (v) => `${v}t` }}
+        />
+      </ComposedChart>
     </ResponsiveContainer>
   )
 }
