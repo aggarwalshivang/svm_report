@@ -27,6 +27,34 @@ export default function TeacherDashboard() {
     try { return JSON.parse(localStorage.getItem('svm_sent_reports') || '{}') } catch { return {} }
   })
 
+// Student table sort state
+  const [studentSort, setStudentSort] = useState({ col: 'avgPct', dir: 'desc' })
+
+  function toggleStudentSort(col) {
+    setStudentSort(prev => prev.col === col ? { col, dir: prev.dir === 'desc' ? 'asc' : 'desc' } : { col, dir: 'desc' })
+  }
+
+  // Tests table sort state
+  const [testSort, setTestSort] = useState({ col: 'date', dir: 'desc' })
+
+  function toggleTestSort(col) {
+    setTestSort(prev => prev.col === col ? { col, dir: prev.dir === 'desc' ? 'asc' : 'desc' } : { col, dir: 'desc' })
+  }
+
+  // Chapter analysis sort + filter state
+  const [chapterSort, setChapterSort] = useState({ col: 'avg', dir: 'desc' })
+  const [chapterSubject, setChapterSubject] = useState('All')
+
+  // Manage tab state
+  const [manageMode, setManageMode] = useState('list') // 'list' | 'add'
+  const [newStudent, setNewStudent] = useState({ name: '', class: '9', emails: [''] })
+  const [savingStudent, setSavingStudent] = useState(false)
+  const [deletingStudentId, setDeletingStudentId] = useState(null)
+  const [expandedStudent, setExpandedStudent] = useState(null)
+  const [pendingEmail, setPendingEmail] = useState('')
+  const [savingEmail, setSavingEmail] = useState(false)
+  const [deletingEmailId, setDeletingEmailId] = useState(null)
+
   useEffect(() => {
     async function load() {
       const [{ data: studs }, { data: scores }] = await Promise.all([
@@ -47,7 +75,9 @@ export default function TeacherDashboard() {
   }
 
   const studentSummary = useMemo(() => {
-    const summaries = students.map((s) => {
+    const seenIds = new Set()
+    const uniqueStudents = students.filter((s) => { if (seenIds.has(s.student_id)) return false; seenIds.add(s.student_id); return true })
+    const summaries = uniqueStudents.map((s) => {
       const rows = allScores.filter((r) => r.student_id === s.student_id)
       const appeared = rows.filter((r) => !r.is_absent)
       const absentCount = rows.filter((r) => r.is_absent).length
@@ -58,7 +88,19 @@ export default function TeacherDashboard() {
       const mathRows = appeared.filter((r) => r.subject === 'Maths')
       const sciAvg  = sciRows.length  ? (sciRows.reduce((a, r)  => a + (r.score_obtained / r.total_marks) * 100, 0) / sciRows.length).toFixed(1)  : null
       const mathAvg = mathRows.length ? (mathRows.reduce((a, r) => a + (r.score_obtained / r.total_marks) * 100, 0) / mathRows.length).toFixed(1) : null
-      return { ...s, totalTests: rows.length, appeared: appeared.length, absentCount, avgPct, sciAvg, mathAvg }
+      const totalScored = appeared.reduce((sum, r) => sum + r.score_obtained, 0)
+      const totalMarks  = appeared.reduce((sum, r) => sum + r.total_marks, 0)
+      const totalLost   = totalMarks - totalScored
+      const positivePct = totalMarks > 0 ? +((totalScored / totalMarks) * 100).toFixed(1) : null
+      const negativePct = totalMarks > 0 ? +((totalLost   / totalMarks) * 100).toFixed(1) : null
+      const sorted = [...appeared].sort((a, b) => a.date.localeCompare(b.date))
+      const avg3 = (arr) => arr.reduce((s, r) => s + (r.score_obtained / r.total_marks) * 100, 0) / arr.length
+      let trend = null
+      if (sorted.length >= 6) {
+        const delta = avg3(sorted.slice(-3)) - avg3(sorted.slice(0, 3))
+        trend = delta > 5 ? 'up' : delta < -5 ? 'down' : 'stable'
+      }
+      return { ...s, totalTests: rows.length, appeared: appeared.length, absentCount, avgPct, sciAvg, mathAvg, totalScored, totalMarks, totalLost, positivePct, negativePct, trend }
     })
 
     // Compute rank within each class
@@ -80,10 +122,14 @@ export default function TeacherDashboard() {
       return true
     })
     .sort((a, b) => {
-      if (a.avgPct === null && b.avgPct === null) return 0
-      if (a.avgPct === null) return 1
-      if (b.avgPct === null) return -1
-      return Number(b.avgPct) - Number(a.avgPct)
+      const { col, dir } = studentSort
+      const mul = dir === 'asc' ? 1 : -1
+      const av = a[col], bv = b[col]
+      if (av === null && bv === null) return 0
+      if (av === null) return 1
+      if (bv === null) return -1
+      if (col === 'student_name') return mul * String(av).localeCompare(String(bv))
+      return mul * (Number(av) - Number(bv))
     })
 
   const scope = classFilter === 'All' ? studentSummary : studentSummary.filter((s) => String(s.class) === classFilter)
@@ -132,6 +178,31 @@ export default function TeacherDashboard() {
 
   const filteredTests = uniqueTests.filter((t) => classFilter === 'All' || String(t.class) === classFilter)
 
+  const sortedTests = [...filteredTests]
+    .map((t) => {
+      const appeared = t.scores.filter((s) => !s.is_absent)
+      return { ...t, appearedCount: appeared.length, topCount70: appeared.filter((s) => s.score_obtained / t.total_marks >= 0.7).length }
+    })
+    .sort((a, b) => {
+      const { col, dir } = testSort
+      const mul = dir === 'asc' ? 1 : -1
+      const av = a[col], bv = b[col]
+      if (av === null && bv === null) return 0
+      if (av === null) return 1
+      if (bv === null) return -1
+      if (typeof av === 'string') return mul * av.localeCompare(bv)
+      return mul * (Number(av) - Number(bv))
+    })
+
+  const studentList = useMemo(() => {
+    const map = {}
+    students.forEach((row) => {
+      if (!map[row.student_id]) map[row.student_id] = { student_id: row.student_id, student_name: row.student_name, class: row.class, emails: [] }
+      if (row.email) map[row.student_id].emails.push({ id: row.id, email: row.email })
+    })
+    return Object.values(map).sort((a, b) => Number(a.class) - Number(b.class) || a.student_name.localeCompare(b.student_name))
+  }, [students])
+
   function generateMessage(test) {
     const d = new Date(test.date + 'T00:00:00')
     const dateStr = d.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })
@@ -170,39 +241,106 @@ export default function TeacherDashboard() {
     setSending(null)
   }
 
+  async function addStudent() {
+    const validEmails = newStudent.emails.filter((e) => e.trim())
+    if (!newStudent.name.trim() || !validEmails.length) return
+    setSavingStudent(true)
+    const maxId = students.length ? Math.max(...students.map((s) => Number(s.student_id))) : 0
+    const newId = maxId + 1
+    const rows = validEmails.map((email) => ({
+      student_id: newId,
+      student_name: newStudent.name.trim(),
+      class: Number(newStudent.class),
+      email: email.trim().toLowerCase(),
+    }))
+    const { data, error } = await supabase.from('student_emails').insert(rows).select()
+    if (!error && data) {
+      setStudents((prev) => [...prev, ...data])
+      setNewStudent({ name: '', class: '9', emails: [''] })
+      setManageMode('list')
+    }
+    setSavingStudent(false)
+  }
+
+  async function deleteStudent(studentId) {
+    if (!window.confirm('Remove this student and all their scores? This cannot be undone.')) return
+    setDeletingStudentId(studentId)
+    await Promise.all([
+      supabase.from('student_emails').delete().eq('student_id', studentId),
+      supabase.from('student_scores').delete().eq('student_id', studentId),
+    ])
+    setStudents((prev) => prev.filter((s) => s.student_id !== studentId))
+    setAllScores((prev) => prev.filter((s) => s.student_id !== studentId))
+    if (expandedStudent === studentId) setExpandedStudent(null)
+    setDeletingStudentId(null)
+  }
+
+  async function addEmailToStudent(student) {
+    const email = pendingEmail.trim().toLowerCase()
+    if (!email) return
+    setSavingEmail(true)
+    const { data, error } = await supabase.from('student_emails').insert([{
+      student_id: student.student_id,
+      student_name: student.student_name,
+      class: student.class,
+      email,
+    }]).select()
+    if (!error && data) { setStudents((prev) => [...prev, ...data]); setPendingEmail('') }
+    setSavingEmail(false)
+  }
+
+  async function removeEmail(emailRow) {
+    setDeletingEmailId(emailRow.id)
+    const { error } = await supabase.from('student_emails').delete().eq('id', emailRow.id)
+    if (!error) setStudents((prev) => prev.filter((s) => s.id !== emailRow.id))
+    setDeletingEmailId(null)
+  }
+
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center" style={{ background: '#f8f3ed' }}>
-        <div className="font-medium" style={{ color: GOLD }}>Loading data…</div>
+      <div className="min-h-screen flex items-center justify-center" style={{ background: '#1a0800' }}>
+        <div className="text-center">
+          <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4" style={{ background: NAV }}>
+            <span className="text-lg font-black" style={{ color: GOLD }}>S</span>
+          </div>
+          <p className="font-semibold text-sm" style={{ color: GOLD }}>Loading data…</p>
+        </div>
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen" style={{ background: '#f8f3ed' }}>
+    <div className="min-h-screen dark-theme" style={{ background: '#1a0800' }}>
       {/* Navbar */}
-      <nav className="text-white px-4 py-3 flex items-center justify-between shadow-lg" style={{ background: NAV }}>
-        <div className="flex items-center gap-2">
-          <span className="font-bold text-base">SVM</span>
-          <span className="px-2 py-0.5 rounded-full text-xs font-medium" style={{ background: GOLD }}>
-            Teacher
-          </span>
+      <nav className="text-white px-5 py-3 flex items-center justify-between" style={{ background: NAV, borderBottom: '2px solid rgba(200,134,10,0.35)', boxShadow: '0 4px 16px rgba(0,0,0,0.2)' }}>
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: GOLD }}>
+            <span className="text-lg font-black text-white">S</span>
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="font-semibold text-sm hidden sm:block">Saraswati Vidya Mandir</span>
+              <span className="font-bold text-sm sm:hidden">SVM</span>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ background: 'rgba(200,134,10,0.2)', color: GOLD, border: `1px solid rgba(200,134,10,0.5)` }}>Teacher</span>
+            </div>
+            <p className="text-[10px] hidden sm:block mt-0.5" style={{ color: '#9a7040' }}>Student Report Portal</p>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="text-xs hidden sm:block" style={{ color: '#d4b483' }}>{session?.email}</span>
+        <div className="flex items-center gap-3">
+          <span className="text-xs hidden sm:block" style={{ color: '#9a7040' }}>{session?.email}</span>
           <button
             onClick={logout}
-            className="text-xs px-3 py-1.5 rounded-lg transition font-medium"
-            style={{ background: DARK }}
-            onMouseEnter={(e) => e.target.style.background = GOLD}
-            onMouseLeave={(e) => e.target.style.background = DARK}
+            className="text-xs px-3 py-1.5 rounded-lg transition font-medium border"
+            style={{ background: 'transparent', borderColor: 'rgba(255,255,255,0.2)', color: '#d4b483' }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = GOLD; e.currentTarget.style.borderColor = GOLD; e.currentTarget.style.color = 'white' }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.2)'; e.currentTarget.style.color = '#d4b483' }}
           >
             Logout
           </button>
         </div>
       </nav>
 
-      <div className="max-w-7xl mx-auto p-3 sm:p-6 space-y-4">
+      <div className="max-w-7xl mx-auto p-3 sm:p-6 space-y-5">
         {/* Summary cards */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <StatCard label="Total Students" value={scope.length} type="gold" />
@@ -211,45 +349,68 @@ export default function TeacherDashboard() {
           <StatCard label="Class 10 Students" value={studentSummary.filter((s) => s.class === 10).length} type="brown2" />
         </div>
 
-        {/* Filters */}
-        <div className="flex flex-wrap gap-2 items-center">
-          {/* View toggle */}
-          <div className="flex bg-white rounded-lg border p-1 gap-1">
-            {[{ k: 'students', label: '👥 Students' }, { k: 'analysis', label: '📊 Analysis' }, { k: 'tests', label: '📋 Tests' }].map(({ k, label }) => (
-              <button key={k} onClick={() => setView(k)}
-                className="px-3 py-1.5 rounded-md text-sm font-medium transition"
-                style={view === k ? { background: NAV, color: GOLD } : { color: '#6b4c1e' }}
-              >{label}</button>
-            ))}
+        {/* ── Sidebar + Content layout ── */}
+        <div className="md:flex md:gap-5 md:items-start">
+
+          {/* Left sidebar — vertical tabs */}
+          <div className="md:w-52 md:flex-shrink-0 mb-3 md:mb-0">
+            <div className="rounded-xl border overflow-hidden flex md:flex-col" style={{ background: '#2d1200', borderColor: 'rgba(200,134,10,0.2)' }}>
+              {[
+                { k: 'students', label: 'Students', icon: '👥' },
+                { k: 'analysis', label: 'Analysis', icon: '📊' },
+                { k: 'tests',    label: 'Tests',    icon: '📋' },
+                { k: 'toppers',  label: 'Toppers',  icon: '🏆' },
+                { k: 'manage',   label: 'Other',    icon: '⚙️' },
+              ].map(({ k, label, icon }) => (
+                <button
+                  key={k}
+                  onClick={() => setView(k)}
+                  className="flex-1 md:flex-none flex items-center justify-center md:justify-start gap-3 px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-semibold transition-all border-b md:border-b-0 md:border-l-[3px] last:border-b-0"
+                  style={view === k
+                    ? { borderColor: GOLD, color: GOLD, background: 'rgba(200,134,10,0.12)' }
+                    : { borderColor: 'rgba(200,134,10,0.1)', color: '#7a5030' }
+                  }
+                >
+                  <span className="text-base leading-none">{icon}</span>
+                  <span className="hidden sm:inline">{label}</span>
+                </button>
+              ))}
+            </div>
           </div>
-          {/* Class filter */}
-          <div className="flex bg-white rounded-lg border p-1 gap-1">
-            {['All', '9', '10'].map((c) => (
-              <button
-                key={c}
-                onClick={() => setClassFilter(c)}
-                className="px-4 py-1.5 rounded-md text-sm font-medium transition"
-                style={classFilter === c ? { background: GOLD, color: 'white' } : { color: '#6b4c1e' }}
-              >
-                {c === 'All' ? 'All Classes' : `Class ${c}`}
-              </button>
-            ))}
-          </div>
-          {view === 'students' && (
-            <input
-              type="text"
-              placeholder="Search student…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="border rounded-lg px-4 py-2 text-sm focus:outline-none bg-white"
-              onFocus={(e) => e.target.style.boxShadow = `0 0 0 2px ${GOLD}40`}
-              onBlur={(e) => e.target.style.boxShadow = ''}
-            />
-          )}
-          <span className="text-sm text-gray-400 ml-auto">
-            {view === 'students' ? `${filtered.length} students` : `${filteredTests.length} tests`}
-          </span>
-        </div>
+
+          {/* Right: filter bar + content */}
+          <div className="flex-1 min-w-0 space-y-4">
+
+            {/* Filter bar (no view toggle) */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 px-3 py-2.5 flex flex-wrap gap-2 items-center">
+              {/* Class filter */}
+              <div className="flex bg-gray-50 rounded-lg border border-gray-200 p-1 gap-1">
+                {['All', '9', '10'].map((c) => (
+                  <button
+                    key={c}
+                    onClick={() => setClassFilter(c)}
+                    className="px-4 py-1.5 rounded-md text-sm font-medium transition"
+                    style={classFilter === c ? { background: GOLD, color: 'white' } : { color: '#6b4c1e' }}
+                  >
+                    {c === 'All' ? 'All Classes' : `Class ${c}`}
+                  </button>
+                ))}
+              </div>
+              {view === 'students' && (
+                <input
+                  type="text"
+                  placeholder="Search student…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="border border-gray-200 rounded-lg px-4 py-2 text-sm focus:outline-none bg-gray-50"
+                  onFocus={(e) => e.target.style.boxShadow = `0 0 0 2px ${GOLD}40`}
+                  onBlur={(e) => e.target.style.boxShadow = ''}
+                />
+              )}
+              <span className="text-sm text-gray-400 ml-auto">
+                {view === 'students' ? `${filtered.length} students` : view === 'tests' ? `${filteredTests.length} tests` : view === 'manage' ? `${studentList.length} students` : ''}
+              </span>
+            </div>
 
         {/* Analysis view */}
         {view === 'analysis' && (() => {
@@ -267,7 +428,10 @@ export default function TeacherDashboard() {
                   data.length > 0 && (
                     <div key={label} className="bg-white rounded-xl shadow p-4">
                       <div className="flex items-center justify-between mb-3">
-                        <p className="text-sm font-semibold" style={{ color }}>{label} — Chapter Analysis</p>
+                        <p className="text-sm font-semibold flex items-center gap-1.5" style={{ color }}>
+                          <span className="inline-block w-1 h-4 rounded-full flex-shrink-0" style={{ background: color }} />
+                          {label} — Chapter Analysis
+                        </p>
                         <div className="flex items-center gap-2 text-[10px] text-gray-400 flex-wrap">
                           <span><span className="inline-block w-3 h-2 rounded-sm mr-1" style={{ background: '#16a34a' }} />≥80%</span>
                           <span><span className="inline-block w-3 h-2 rounded-sm mr-1" style={{ background: '#c8860a' }} />60–79%</span>
@@ -281,61 +445,246 @@ export default function TeacherDashboard() {
                 )}
               </div>
 
-              {/* Strong / Moderate / Weak tables */}
-              {[
-                { label: '🏆 Strong Chapters', data: strongChapters,   type: 'strong',   empty: 'No chapters above 80% yet.' },
-                { label: '🟡 Moderate Chapters', data: moderateChapters, type: 'moderate', empty: 'No moderate chapters.' },
-                { label: '⚠️ Weak Chapters',   data: weakChapters,     type: 'weak',     empty: 'No weak chapters — great work!' },
-              ].map(({ label, data, type, empty }) => (
-                <div key={type} className="bg-white rounded-xl shadow overflow-hidden">
-                  <div className="px-5 py-3 border-b" style={{ background: type === 'strong' ? '#f0fdf4' : type === 'moderate' ? '#fffbeb' : '#fef2f2' }}>
-                    <p className="text-sm font-semibold" style={{ color: type === 'strong' ? '#166534' : type === 'moderate' ? '#92400e' : '#991b1b' }}>{label} ({data.length})</p>
-                  </div>
-                  {data.length === 0
-                    ? <p className="text-sm text-gray-400 py-6 text-center">{empty}</p>
-                    : (
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr className="text-left text-xs text-gray-500 uppercase" style={{ background: type === 'strong' ? '#f0fdf4' : type === 'moderate' ? '#fffbeb' : '#fef2f2' }}>
-                              <th className="px-5 py-2">Chapter / Topic</th>
-                              <th className="px-5 py-2">Subject</th>
-                              <th className="px-5 py-2 text-center">Tests</th>
-                              <th className="px-5 py-2 text-center">Class Avg %</th>
-                              <th className="px-5 py-2 text-center">Best</th>
-                              <th className="px-5 py-2 text-center">Worst</th>
-                              <th className="px-5 py-2">Progress</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-gray-50">
-                            {data.map((t) => {
-                              const barColor = type === 'strong' ? '#16a34a' : type === 'moderate' ? '#c8860a' : '#ef4444'
-                              const textColor = type === 'strong' ? 'text-green-700' : type === 'moderate' ? 'text-amber-600' : 'text-red-600'
-                              return (
-                                <tr key={`${t.subject}-${t.topic}`} className={type === 'strong' ? 'hover:bg-green-50' : type === 'moderate' ? 'hover:bg-amber-50' : 'hover:bg-red-50'}>
-                                  <td className="px-5 py-2 font-medium text-gray-800 text-xs">{t.topic}</td>
-                                  <td className="px-5 py-2">
-                                    <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${t.subject === 'Science' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>{t.subject}</span>
-                                  </td>
-                                  <td className="px-5 py-2 text-center text-gray-600 text-xs">{t.testCount}</td>
-                                  <td className="px-5 py-2 text-center"><span className={`font-bold text-sm ${textColor}`}>{t.avg}%</span></td>
-                                  <td className="px-5 py-2 text-center text-green-600 font-medium text-xs">{t.best}%</td>
-                                  <td className="px-5 py-2 text-center text-red-500 font-medium text-xs">{t.worst}%</td>
-                                  <td className="px-5 py-2 w-28">
-                                    <div className="w-full bg-gray-100 rounded-full h-1.5">
-                                      <div className="h-1.5 rounded-full" style={{ width: `${t.avg}%`, background: barColor }} />
-                                    </div>
-                                  </td>
+              {/* Filter bar */}
+              <div className="bg-white rounded-xl shadow px-4 py-2.5 flex flex-wrap items-center gap-3">
+                <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Subject</span>
+                <div className="flex gap-1">
+                  {['All', 'Maths', 'Science'].map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => setChapterSubject(s)}
+                      className="px-3 py-1 rounded-full text-xs font-semibold transition-all"
+                      style={chapterSubject === s
+                        ? { background: GOLD, color: '#fff' }
+                        : { background: 'rgba(200,134,10,0.1)', color: '#9a7040' }
+                      }
+                    >{s}</button>
+                  ))}
+                </div>
+                <span className="text-xs text-gray-400 ml-auto">
+                  {chapterSubject === 'All'
+                    ? `${chapterStats.length} chapters total`
+                    : `${chapterStats.filter((t) => t.subject === chapterSubject).length} ${chapterSubject} chapters`}
+                </span>
+              </div>
+
+              {/* Strong / Moderate / Weak sortable tables */}
+              {(() => {
+                const cols = [
+                  { col: 'topic',     label: 'Chapter / Topic', center: false },
+                  { col: 'subject',   label: 'Subject',         center: false },
+                  { col: 'testCount', label: 'Tests',           center: true  },
+                  { col: 'avg',       label: 'Class Avg %',     center: true  },
+                  { col: 'best',      label: 'Best',            center: true  },
+                  { col: 'worst',     label: 'Worst',           center: true  },
+                ]
+                function applySortTo(data) {
+                  const filtered = chapterSubject === 'All' ? data : data.filter((t) => t.subject === chapterSubject)
+                  const { col, dir } = chapterSort
+                  return [...filtered].sort((a, b) => {
+                    const av = a[col]; const bv = b[col]
+                    if (typeof av === 'string') return dir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av)
+                    return dir === 'asc' ? av - bv : bv - av
+                  })
+                }
+                function onColClick(col) {
+                  setChapterSort((prev) => ({ col, dir: prev.col === col && prev.dir === 'desc' ? 'asc' : 'desc' }))
+                }
+                return [
+                  { label: '🏆 Strong Chapters',  data: applySortTo(strongChapters),   type: 'strong',   empty: 'No chapters above 80% yet.' },
+                  { label: '🟡 Moderate Chapters', data: applySortTo(moderateChapters), type: 'moderate', empty: 'No moderate chapters.' },
+                  { label: '⚠️ Weak Chapters',     data: applySortTo(weakChapters),     type: 'weak',     empty: 'No weak chapters — great work!' },
+                ].map(({ label, data, type, empty }) => {
+                  const hdrBg   = type === 'strong' ? 'rgba(22,163,74,0.12)'  : type === 'moderate' ? 'rgba(200,134,10,0.12)'  : 'rgba(239,68,68,0.12)'
+                  const rowBg   = type === 'strong' ? 'rgba(22,163,74,0.06)'  : type === 'moderate' ? 'rgba(200,134,10,0.06)'  : 'rgba(239,68,68,0.06)'
+                  const hdrColor = type === 'strong' ? '#4ade80' : type === 'moderate' ? '#c8860a' : '#f87171'
+                  const barColor = type === 'strong' ? '#16a34a' : type === 'moderate' ? '#c8860a' : '#ef4444'
+                  const valColor = type === 'strong' ? '#4ade80' : type === 'moderate' ? '#c8860a' : '#f87171'
+                  return (
+                    <div key={type} className="bg-white rounded-xl shadow overflow-hidden">
+                      <div className="px-5 py-3 border-b" style={{ background: hdrBg }}>
+                        <p className="text-sm font-semibold" style={{ color: hdrColor }}>{label} ({data.length})</p>
+                      </div>
+                      {data.length === 0
+                        ? <p className="text-sm text-gray-400 py-6 text-center">{empty}</p>
+                        : (
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-sm">
+                              <thead>
+                                <tr className="text-xs text-gray-500 uppercase" style={{ background: rowBg }}>
+                                  {cols.map((c) => (
+                                    <th
+                                      key={c.col}
+                                      onClick={() => onColClick(c.col)}
+                                      className={`px-5 py-2 select-none ${c.center ? 'text-center' : 'text-left'}`}
+                                      style={{ cursor: 'pointer', whiteSpace: 'nowrap', userSelect: 'none' }}
+                                    >
+                                      {c.label}{' '}
+                                      <span style={{ color: chapterSort.col === c.col ? GOLD : 'rgba(200,134,10,0.3)', fontSize: '10px' }}>
+                                        {chapterSort.col === c.col ? (chapterSort.dir === 'asc' ? '▲' : '▼') : '⇅'}
+                                      </span>
+                                    </th>
+                                  ))}
+                                  <th className="px-5 py-2 text-left text-xs text-gray-500 uppercase">Progress</th>
                                 </tr>
-                              )
-                            })}
-                          </tbody>
-                        </table>
+                              </thead>
+                              <tbody className="divide-y divide-gray-50">
+                                {data.map((t) => (
+                                  <tr key={`${t.subject}-${t.topic}`} className={type === 'strong' ? 'hover:bg-green-50' : type === 'moderate' ? 'hover:bg-amber-50' : 'hover:bg-red-50'}>
+                                    <td className="px-5 py-2 font-medium text-gray-800 text-xs">{t.topic}</td>
+                                    <td className="px-5 py-2">
+                                      <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${t.subject === 'Science' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>{t.subject}</span>
+                                    </td>
+                                    <td className="px-5 py-2 text-center text-gray-600 text-xs">{t.testCount}</td>
+                                    <td className="px-5 py-2 text-center"><span className="font-bold text-sm" style={{ color: valColor }}>{t.avg}%</span></td>
+                                    <td className="px-5 py-2 text-center text-xs font-medium" style={{ color: '#4ade80' }}>{t.best}%</td>
+                                    <td className="px-5 py-2 text-center text-xs font-medium" style={{ color: '#f87171' }}>{t.worst}%</td>
+                                    <td className="px-5 py-2 w-28">
+                                      <div className="w-full bg-gray-100 rounded-full h-1.5">
+                                        <div className="h-1.5 rounded-full" style={{ width: `${t.avg}%`, background: barColor }} />
+                                      </div>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )
+                      }
+                    </div>
+                  )
+                })
+              })()}
+            </div>
+          )
+        })()}
+
+        {/* Toppers board */}
+        {view === 'toppers' && (() => {
+          const top9  = studentSummary.filter((s) => s.class === 9  && s.avgPct !== null).sort((a, b) => Number(b.avgPct) - Number(a.avgPct))
+          const top10 = studentSummary.filter((s) => s.class === 10 && s.avgPct !== null).sort((a, b) => Number(b.avgPct) - Number(a.avgPct))
+
+function ini(name) {
+            return name ? name.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase() : '?'
+          }
+
+          // Slot definitions: display order is left(#2), center(#1), right(#3)
+          const SLOTS = [
+            { idx: 1, rank: 2, medal: '🥈', color: '#B8B8B8', avatarBg: '#5a5a5a', blockH: 76  },
+            { idx: 0, rank: 1, medal: '🥇', color: '#FFD700', avatarBg: '#b8860b', blockH: 120 },
+            { idx: 2, rank: 3, medal: '🥉', color: '#CD7F32', avatarBg: '#8B4513', blockH: 48  },
+          ]
+
+          function ClassPodium({ students, label }) {
+            const top3 = students.slice(0, 3)
+            const rest = students.slice(3, 10)
+            return (
+              <div style={{ flex: 1, minWidth: 0 }}>
+                {/* Class label */}
+                <div style={{ textAlign: 'center', marginBottom: '24px' }}>
+                  <span style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '3px', color: '#9a7040', textTransform: 'uppercase' }}>Class</span>
+                  <div style={{ fontSize: '28px', fontWeight: 900, color: GOLD, lineHeight: 1.1 }}>{label}</div>
+                </div>
+
+                {/* Podium stage */}
+                <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'center', gap: '10px', marginBottom: '24px', paddingBottom: '4px' }}>
+                  {SLOTS.map(({ idx, rank, medal, color, avatarBg, blockH }) => {
+                    const s = top3[idx]
+                    if (!s) return <div key={rank} style={{ width: '96px' }} />
+                    return (
+                      <div key={s.student_id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '96px' }}>
+                        <div style={{ fontSize: '22px', marginBottom: '4px' }}>{medal}</div>
+                        <div style={{
+                          width: '60px', height: '60px', borderRadius: '50%',
+                          background: avatarBg, color: '#fff', fontWeight: 900, fontSize: '18px',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          boxShadow: `0 0 18px ${color}66`,
+                          marginBottom: '8px', flexShrink: 0,
+                        }}>{ini(s.student_name)}</div>
+                        <div style={{ color: '#f5ede0', fontWeight: 700, fontSize: '11px', textAlign: 'center', lineHeight: '1.3', marginBottom: '4px', wordBreak: 'break-word' }}>
+                          {s.student_name}
+                        </div>
+                        <div style={{ color, fontWeight: 900, fontSize: '14px', marginBottom: '8px' }}>{s.avgPct}%</div>
+                        <div style={{
+                          width: '100%', height: `${blockH}px`,
+                          borderRadius: '10px 10px 0 0',
+                          background: `linear-gradient(to top, ${color}35, ${color}0c)`,
+                          border: `1px solid ${color}50`, borderBottom: 'none',
+                          display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
+                          paddingBottom: '8px',
+                        }}>
+                          <span style={{ color, fontWeight: 900, fontSize: '13px' }}>#{rank}</span>
+                        </div>
                       </div>
                     )
-                  }
+                  })}
                 </div>
-              ))}
+
+                {/* Ranks 4–10 */}
+                {rest.map((s, i) => (
+                  <div key={s.student_id} style={{
+                    display: 'flex', alignItems: 'center', gap: '10px',
+                    padding: '9px 14px', borderRadius: '10px', marginBottom: '6px',
+                    background: 'rgba(200,134,10,0.07)', border: '1px solid rgba(200,134,10,0.15)',
+                  }}>
+                    <span style={{ color: '#9a7040', fontWeight: 700, fontSize: '11px', width: '22px', flexShrink: 0 }}>#{i + 4}</span>
+                    <div style={{
+                      width: '30px', height: '30px', borderRadius: '50%',
+                      background: GOLD, color: '#fff', fontWeight: 900, fontSize: '11px',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                    }}>{ini(s.student_name)}</div>
+                    <span style={{ color: '#f5ede0', fontWeight: 600, fontSize: '13px', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {s.student_name}
+                    </span>
+                    <span style={{ color: Number(s.avgPct) >= 80 ? '#4ade80' : Number(s.avgPct) >= 60 ? GOLD : '#f87171', fontWeight: 700, fontSize: '13px', flexShrink: 0 }}>
+                      {s.avgPct}%
+                    </span>
+                  </div>
+                ))}
+
+                {students.length === 0 && (
+                  <div style={{ textAlign: 'center', padding: '32px 0', color: '#9a7040', fontSize: '13px' }}>No data yet</div>
+                )}
+              </div>
+            )
+          }
+
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div>
+                <span style={{ fontSize: '11px', fontWeight: 700, color: '#9a7040', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                  Ranked by overall average · min. 1 test
+                </span>
+              </div>
+
+              <div style={{
+                background: '#1a0800',
+                border: '1px solid rgba(200,134,10,0.25)',
+                borderRadius: '20px',
+                padding: '32px 28px 28px',
+              }}>
+                {/* Header */}
+                <div style={{ textAlign: 'center', marginBottom: '32px' }}>
+                  <div style={{
+                    display: 'inline-flex', alignItems: 'center', gap: '8px',
+                    background: 'rgba(200,134,10,0.14)', border: '1px solid rgba(200,134,10,0.32)',
+                    borderRadius: '999px', padding: '8px 20px', marginBottom: '8px',
+                  }}>
+                    <span style={{ fontSize: '18px' }}>🏆</span>
+                    <span style={{ color: GOLD, fontWeight: 900, fontSize: '13px', letterSpacing: '3px', textTransform: 'uppercase' }}>
+                      Saraswati Vidya Mandir
+                    </span>
+                  </div>
+                  <div style={{ color: '#7a5030', fontSize: '12px', marginTop: '4px' }}>Top Performers — All Time</div>
+                </div>
+
+                {/* Two class columns */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1px 1fr', gap: '0 24px' }}>
+                  <ClassPodium students={top9}  label="9" />
+                  <div style={{ background: 'rgba(200,134,10,0.18)', margin: '0 auto', width: '1px', minHeight: '100%' }} />
+                  <ClassPodium students={top10} label="10" />
+                </div>
+              </div>
             </div>
           )
         })()}
@@ -346,22 +695,38 @@ export default function TeacherDashboard() {
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="text-left text-xs text-gray-500 uppercase tracking-wide" style={{ background: '#fdf6ee' }}>
-                    <th className="px-4 py-3 text-center">#</th>
-                    <th className="px-4 py-3">Date</th>
-                    <th className="px-4 py-3">Subject</th>
-                    <th className="px-4 py-3">Chapter / Topic</th>
-                    <th className="px-4 py-3 text-center">Class</th>
-                    <th className="px-4 py-3 text-center">Total</th>
-                    <th className="px-4 py-3 text-center">Students</th>
-                    <th className="px-4 py-3 text-center">Top ≥70%</th>
-                    <th className="px-4 py-3 text-center">Send</th>
-                  </tr>
+                  {(() => {
+                    const SI = ({ col }) => (
+                      <span className="ml-1" style={{ color: testSort.col === col ? GOLD : 'rgba(200,134,10,0.35)', fontSize: '9px' }}>
+                        {testSort.col === col ? (testSort.dir === 'asc' ? '▲' : '▼') : '⇅'}
+                      </span>
+                    )
+                    const TH = ({ col, className = '', children }) => (
+                      <th
+                        className={`px-4 py-3 cursor-pointer select-none hover:text-amber-400 transition-colors ${className}`}
+                        onClick={() => toggleTestSort(col)}
+                      >
+                        {children}<SI col={col} />
+                      </th>
+                    )
+                    return (
+                      <tr className="text-left text-xs text-gray-500 uppercase tracking-wide" style={{ background: '#120600' }}>
+                        <TH col="testNo" className="text-center">#</TH>
+                        <TH col="date">Date</TH>
+                        <TH col="subject">Subject</TH>
+                        <TH col="topic">Chapter / Topic</TH>
+                        <TH col="class" className="text-center">Class</TH>
+                        <TH col="total_marks" className="text-center">Total</TH>
+                        <TH col="appearedCount" className="text-center">Students</TH>
+                        <TH col="topCount70" className="text-center">Top ≥70%</TH>
+                        <th className="px-4 py-3 text-center">Send</th>
+                      </tr>
+                    )
+                  })()}
                 </thead>
                 <tbody className="divide-y divide-gray-50">
-                  {filteredTests.map((t) => {
-                    const appeared = t.scores.filter((s) => !s.is_absent)
-                    const topCount = appeared.filter((s) => s.score_obtained / t.total_marks >= 0.7).length
+                  {sortedTests.map((t) => {
+                    const { appearedCount, topCount70: topCount } = t
                     const isSending = sending === t.key
                     const result = sendResult?.key === t.key ? sendResult : null
                     return (
@@ -376,7 +741,7 @@ export default function TeacherDashboard() {
                           <span className="px-2 py-0.5 rounded-full text-xs font-bold text-white" style={{ background: GOLD }}>{t.class}</span>
                         </td>
                         <td className="px-4 py-3 text-center font-medium text-gray-700">{t.total_marks}</td>
-                        <td className="px-4 py-3 text-center text-gray-600 text-xs">{appeared.length}/{t.scores.length}</td>
+                        <td className="px-4 py-3 text-center text-gray-600 text-xs">{appearedCount}/{t.scores.length}</td>
                         <td className="px-4 py-3 text-center">
                           <span className={`font-semibold text-xs ${topCount > 0 ? 'text-green-600' : 'text-gray-400'}`}>{topCount}</span>
                         </td>
@@ -421,17 +786,38 @@ export default function TeacherDashboard() {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="text-left text-xs text-gray-500 uppercase tracking-wide" style={{ background: '#fdf6ee' }}>
-                  <th className="px-3 sm:px-5 py-3">Student</th>
-                  <th className="px-3 sm:px-5 py-3 text-center">Class</th>
-                  <th className="px-3 sm:px-5 py-3 text-center">Rank</th>
-                  <th className="px-3 sm:px-5 py-3 text-center hidden sm:table-cell">Tests</th>
-                  <th className="px-3 sm:px-5 py-3 text-center">Avg %</th>
-                  <th className="px-3 sm:px-5 py-3 text-center hidden md:table-cell">Science</th>
-                  <th className="px-3 sm:px-5 py-3 text-center hidden md:table-cell">Maths</th>
-                  <th className="px-3 sm:px-5 py-3 text-center hidden sm:table-cell">Absent</th>
-                  <th className="px-3 sm:px-5 py-3 text-center hidden sm:table-cell">Detail</th>
-                </tr>
+                {(() => {
+                  const SI = ({ col }) => (
+                    <span className="ml-1" style={{ color: studentSort.col === col ? GOLD : 'rgba(200,134,10,0.35)', fontSize: '9px' }}>
+                      {studentSort.col === col ? (studentSort.dir === 'asc' ? '▲' : '▼') : '⇅'}
+                    </span>
+                  )
+                  const TH = ({ col, className = '', children, style }) => (
+                    <th
+                      className={`px-3 sm:px-5 py-3 cursor-pointer select-none hover:text-amber-400 transition-colors ${className}`}
+                      style={style}
+                      onClick={() => toggleStudentSort(col)}
+                    >
+                      {children}<SI col={col} />
+                    </th>
+                  )
+                  return (
+                    <tr className="text-left text-xs text-gray-500 uppercase tracking-wide" style={{ background: '#120600' }}>
+                      <TH col="student_name">Student</TH>
+                      <TH col="class" className="text-center">Class</TH>
+                      <TH col="rank" className="text-center">Rank</TH>
+                      <TH col="totalTests" className="text-center hidden sm:table-cell">Tests</TH>
+                      <TH col="avgPct" className="text-center">Avg %</TH>
+                      <TH col="sciAvg" className="text-center hidden md:table-cell">Science</TH>
+                      <TH col="mathAvg" className="text-center hidden md:table-cell">Maths</TH>
+                      <th className="px-3 sm:px-5 py-3 text-center hidden lg:table-cell">Trend</th>
+                      <TH col="positivePct" className="text-center hidden lg:table-cell" style={{ color: '#4ade80' }}>+ve %</TH>
+                      <TH col="negativePct" className="text-center hidden lg:table-cell" style={{ color: '#f87171' }}>-ve %</TH>
+                      <TH col="absentCount" className="text-center hidden sm:table-cell">Absent</TH>
+                      <th className="px-3 sm:px-5 py-3 text-center hidden sm:table-cell">Detail</th>
+                    </tr>
+                  )
+                })()}
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {filtered.map((s) => (
@@ -458,6 +844,28 @@ export default function TeacherDashboard() {
                     <td className="px-3 sm:px-5 py-3 text-center"><PctBadge pct={s.avgPct} /></td>
                     <td className="px-3 sm:px-5 py-3 text-center hidden md:table-cell"><PctBadge pct={s.sciAvg} /></td>
                     <td className="px-3 sm:px-5 py-3 text-center hidden md:table-cell"><PctBadge pct={s.mathAvg} /></td>
+                    <td className="px-3 sm:px-5 py-3 text-center hidden lg:table-cell">
+                      {s.trend === 'up'
+                        ? <span className="text-xs font-bold" style={{ color: '#4ade80' }}>▲ Up</span>
+                        : s.trend === 'down'
+                          ? <span className="text-xs font-bold" style={{ color: '#f87171' }}>▼ Down</span>
+                          : s.trend === 'stable'
+                            ? <span className="text-xs font-bold" style={{ color: '#c8860a' }}>→ Stable</span>
+                            : <span className="text-xs" style={{ color: '#9a7040' }}>—</span>
+                      }
+                    </td>
+                    <td className="px-3 sm:px-5 py-3 text-center hidden lg:table-cell">
+                      {s.positivePct !== null
+                        ? <span className="font-semibold text-sm" style={{ color: '#4ade80' }}>{s.positivePct}%</span>
+                        : <span className="text-gray-300 text-xs">—</span>
+                      }
+                    </td>
+                    <td className="px-3 sm:px-5 py-3 text-center hidden lg:table-cell">
+                      {s.negativePct !== null
+                        ? <span className="font-semibold text-sm" style={{ color: '#f87171' }}>{s.negativePct}%</span>
+                        : <span className="text-gray-300 text-xs">—</span>
+                      }
+                    </td>
                     <td className="px-3 sm:px-5 py-3 text-center hidden sm:table-cell">
                       {s.absentCount > 0
                         ? <span className="text-red-500 font-medium">{s.absentCount}</span>
@@ -482,6 +890,222 @@ export default function TeacherDashboard() {
             )}
           </div>
         </div>}
+
+        {/* ── Manage / Other tab ── */}
+        {view === 'manage' && (
+          <div className="space-y-4">
+            {manageMode === 'list' ? (
+              <div className="bg-white rounded-xl shadow overflow-hidden">
+                {/* Header */}
+                {(() => {
+                  const filteredRoster = classFilter === 'All' ? studentList : studentList.filter((s) => String(s.class) === classFilter)
+                  return (
+                    <>
+                <div className="px-5 py-4 border-b flex items-center justify-between" style={{ background: '#120600' }}>
+                  <div>
+                    <p className="font-semibold text-gray-800">Student Roster</p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {filteredRoster.length}{classFilter !== 'All' ? ` Class ${classFilter}` : ''} student{filteredRoster.length !== 1 ? 's' : ''} · expand a row to manage emails
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setManageMode('add')}
+                    className="text-sm font-semibold px-4 py-2 rounded-lg text-white transition"
+                    style={{ background: GOLD }}
+                  >
+                    + Add Student
+                  </button>
+                </div>
+
+                {/* Column headers */}
+                <div className="px-5 py-2 flex items-center gap-3 text-[10px] font-bold uppercase tracking-wider text-gray-400 border-b" style={{ background: '#150700' }}>
+                  <span className="w-12 flex-shrink-0">Class</span>
+                  <span className="flex-1">Student Name</span>
+                  <span className="w-16 text-center flex-shrink-0">Emails</span>
+                  <span className="w-16 flex-shrink-0" />
+                </div>
+
+                {/* Student list */}
+                <div className="divide-y divide-gray-50">
+                  {filteredRoster.map((s) => {
+                    const isExpanded = expandedStudent === s.student_id
+                    const isDeleting = deletingStudentId === s.student_id
+                    return (
+                      <div key={s.student_id}>
+                        <div
+                          className="px-5 py-3 flex items-center gap-3 cursor-pointer hover:bg-amber-50 transition"
+                          onClick={() => { setExpandedStudent(isExpanded ? null : s.student_id); setPendingEmail('') }}
+                        >
+                          <span className="w-12 flex-shrink-0 text-center">
+                            <span className="text-xs font-bold px-2.5 py-1 rounded-full text-white" style={{ background: GOLD }}>
+                              {s.class}
+                            </span>
+                          </span>
+                          <span className="flex-1 font-medium text-gray-800 truncate">{s.student_name}</span>
+                          <span className="w-16 text-center text-xs text-gray-400 flex-shrink-0">{s.emails.length} email{s.emails.length !== 1 ? 's' : ''}</span>
+                          <div className="w-16 flex items-center justify-end gap-2 flex-shrink-0">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); deleteStudent(s.student_id) }}
+                              disabled={isDeleting}
+                              className="text-xs text-red-500 font-medium px-2 py-1 rounded hover:bg-red-50 transition disabled:opacity-50"
+                            >
+                              {isDeleting ? '…' : 'Remove'}
+                            </button>
+                            <span className="text-gray-400 text-xs select-none">{isExpanded ? '▲' : '▼'}</span>
+                          </div>
+                        </div>
+
+                        {isExpanded && (
+                          <div className="px-5 pb-4 pt-2 border-t border-amber-100" style={{ background: 'rgba(200,134,10,0.06)' }}>
+                            <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-2">Linked Emails</p>
+                            <div className="space-y-1.5 mb-3">
+                              {s.emails.map((emailRow) => (
+                                <div key={emailRow.id} className="flex items-center justify-between gap-2 bg-white rounded-lg px-3 py-2 border border-gray-100">
+                                  <span className="text-sm text-gray-700">{emailRow.email}</span>
+                                  {s.emails.length > 1 ? (
+                                    <button
+                                      onClick={() => removeEmail(emailRow)}
+                                      disabled={deletingEmailId === emailRow.id}
+                                      className="text-xs text-red-400 hover:text-red-600 font-semibold flex-shrink-0 disabled:opacity-50"
+                                    >
+                                      {deletingEmailId === emailRow.id ? '…' : 'Remove'}
+                                    </button>
+                                  ) : (
+                                    <span className="text-[10px] text-gray-300">primary</span>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                            <div className="flex gap-2">
+                              <input
+                                type="email"
+                                placeholder="Add another email…"
+                                value={pendingEmail}
+                                onChange={(e) => setPendingEmail(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') addEmailToStudent(s) }}
+                                className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none bg-white"
+                                onFocus={(e) => e.target.style.boxShadow = `0 0 0 2px ${GOLD}40`}
+                                onBlur={(e) => e.target.style.boxShadow = ''}
+                              />
+                              <button
+                                onClick={() => addEmailToStudent(s)}
+                                disabled={savingEmail || !pendingEmail.trim()}
+                                className="text-sm font-semibold px-3 py-1.5 rounded-lg text-white transition disabled:opacity-40"
+                                style={{ background: GOLD }}
+                              >
+                                {savingEmail ? '…' : 'Add'}
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                  {filteredRoster.length === 0 && (
+                    <p className="text-center text-gray-400 py-10 text-sm">
+                      {classFilter !== 'All' ? `No Class ${classFilter} students.` : 'No students yet.'}
+                    </p>
+                  )}
+                </div>
+                    </>
+                  )
+                })()}
+              </div>
+            ) : (
+              /* Add student form */
+              <div className="bg-white rounded-xl shadow overflow-hidden max-w-xl">
+                <div className="px-5 py-4 border-b" style={{ background: '#120600' }}>
+                  <p className="font-semibold text-gray-800">Add New Student</p>
+                </div>
+                <div className="p-6 space-y-5">
+                  {/* Name */}
+                  <div>
+                    <label className="block text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-1.5">Student Name</label>
+                    <input
+                      type="text"
+                      placeholder="Full name"
+                      value={newStudent.name}
+                      onChange={(e) => setNewStudent((p) => ({ ...p, name: e.target.value }))}
+                      className="w-full border border-gray-200 rounded-lg px-4 py-2.5 text-sm focus:outline-none"
+                      onFocus={(e) => e.target.style.boxShadow = `0 0 0 2px ${GOLD}40`}
+                      onBlur={(e) => e.target.style.boxShadow = ''}
+                    />
+                  </div>
+                  {/* Class */}
+                  <div>
+                    <label className="block text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-1.5">Class</label>
+                    <div className="flex gap-2">
+                      {['9', '10'].map((c) => (
+                        <button
+                          key={c}
+                          onClick={() => setNewStudent((p) => ({ ...p, class: c }))}
+                          className="px-8 py-2.5 rounded-lg text-sm font-semibold transition"
+                          style={newStudent.class === c ? { background: GOLD, color: 'white' } : { background: '#f5ede0', color: '#6b4c1e' }}
+                        >
+                          Class {c}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {/* Emails */}
+                  <div>
+                    <label className="block text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-1.5">Email Addresses</label>
+                    <div className="space-y-2">
+                      {newStudent.emails.map((email, idx) => (
+                        <div key={idx} className="flex gap-2">
+                          <input
+                            type="email"
+                            placeholder={idx === 0 ? 'Primary email' : 'Additional email'}
+                            value={email}
+                            onChange={(e) => {
+                              const emails = [...newStudent.emails]; emails[idx] = e.target.value
+                              setNewStudent((p) => ({ ...p, emails }))
+                            }}
+                            className="flex-1 border border-gray-200 rounded-lg px-4 py-2.5 text-sm focus:outline-none"
+                            onFocus={(e) => e.target.style.boxShadow = `0 0 0 2px ${GOLD}40`}
+                            onBlur={(e) => e.target.style.boxShadow = ''}
+                          />
+                          {newStudent.emails.length > 1 && (
+                            <button
+                              onClick={() => setNewStudent((p) => ({ ...p, emails: p.emails.filter((_, i) => i !== idx) }))}
+                              className="text-red-400 hover:text-red-600 px-2 text-lg"
+                            >×</button>
+                          )}
+                        </div>
+                      ))}
+                      <button
+                        onClick={() => setNewStudent((p) => ({ ...p, emails: [...p.emails, ''] }))}
+                        className="text-sm font-medium"
+                        style={{ color: GOLD }}
+                      >
+                        + Add another email
+                      </button>
+                    </div>
+                  </div>
+                  {/* Actions */}
+                  <div className="flex gap-3 pt-1">
+                    <button
+                      onClick={addStudent}
+                      disabled={savingStudent || !newStudent.name.trim() || !newStudent.emails.some((e) => e.trim())}
+                      className="px-6 py-2.5 rounded-lg text-sm font-semibold text-white transition disabled:opacity-50"
+                      style={{ background: GOLD }}
+                    >
+                      {savingStudent ? 'Saving…' : 'Add Student'}
+                    </button>
+                    <button
+                      onClick={() => { setManageMode('list'); setNewStudent({ name: '', class: '9', emails: [''] }) }}
+                      className="px-6 py-2.5 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100 transition"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+          </div>{/* /right-content */}
+        </div>{/* /sidebar-layout */}
       </div>
 
       {selected && (
@@ -504,15 +1128,19 @@ function PctBadge({ pct }) {
 
 function StatCard({ label, value, type }) {
   const styles = {
-    gold:   { background: '#fef3d0', color: '#7a5100', border: '1px solid #f0d080' },
-    green:  { background: '#f0fdf4', color: '#166534', border: '1px solid #bbf7d0' },
-    brown:  { background: '#fdf6ee', color: '#6b4c1e', border: '1px solid #e8d5b0' },
-    brown2: { background: '#faf0e6', color: '#5c3d15', border: '1px solid #ddc99a' },
+    gold:   { accent: '#c8860a',  valueColor: '#1e293b' },
+    green:  { accent: '#22c55e',  valueColor: '#1e293b' },
+    brown:  { accent: '#f59e0b',  valueColor: '#1e293b' },
+    brown2: { accent: '#a78bfa',  valueColor: '#1e293b' },
   }
+  const s = styles[type]
   return (
-    <div className="rounded-xl p-5" style={styles[type]}>
-      <p className="text-xs font-medium opacity-70 mb-1">{label}</p>
-      <p className="text-2xl font-bold">{value}</p>
+    <div className="bg-white rounded-xl overflow-hidden shadow-sm border border-gray-100">
+      <div className="h-1 w-full" style={{ background: s.accent }} />
+      <div className="px-5 py-4">
+        <p className="text-[11px] font-semibold uppercase tracking-wider mb-2 text-gray-400">{label}</p>
+        <p className="text-3xl font-bold tracking-tight text-gray-800">{value}</p>
+      </div>
     </div>
   )
 }
@@ -610,9 +1238,9 @@ function StudentDetailModal({ student, scores, onClose }) {
               <p className="text-xs text-gray-500 font-medium mb-2">Score Trend (%)</p>
               <ResponsiveContainer width="100%" height={160}>
                 <LineChart data={chartData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0ebe4" />
-                  <XAxis dataKey="date" tick={{ fontSize: 10 }} minTickGap={48} interval="preserveStartEnd" />
-                  <YAxis domain={[0, 100]} tick={{ fontSize: 10 }} unit="%" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(200,134,10,0.12)" />
+                  <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#9a7040' }} minTickGap={48} interval="preserveStartEnd" />
+                  <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: '#9a7040' }} unit="%" />
                   <ReferenceLine y={80} stroke="#16a34a" strokeDasharray="4 3" strokeWidth={1.5}
                     label={{ value: '80%', position: 'insideTopRight', fontSize: 9, fill: '#16a34a' }} />
                   <Tooltip formatter={(v) => `${v}%`} />
@@ -630,9 +1258,9 @@ function StudentDetailModal({ student, scores, onClose }) {
               <p className="text-xs text-gray-500 font-medium mb-2">Subject Average</p>
               <ResponsiveContainer width="100%" height={160}>
                 <BarChart data={subjectData} barSize={28}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0ebe4" />
-                  <XAxis dataKey="subject" tick={{ fontSize: 11 }} />
-                  <YAxis domain={[0, 100]} tick={{ fontSize: 10 }} unit="%" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(200,134,10,0.12)" />
+                  <XAxis dataKey="subject" tick={{ fontSize: 11, fill: '#9a7040' }} />
+                  <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: '#9a7040' }} unit="%" />
                   <Tooltip formatter={(v) => `${v}%`} />
                   <Bar dataKey="avg" fill={GOLD} radius={[4, 4, 0, 0]} />
                 </BarChart>
@@ -667,7 +1295,7 @@ function StudentDetailModal({ student, scores, onClose }) {
             {tab === 'all' && (
               <>
                 {/* Filter + Sort bar */}
-                <div className="px-4 py-2.5 flex flex-wrap items-center gap-2 border-b border-gray-100" style={{ background: '#fdfaf6' }}>
+                <div className="px-4 py-2.5 flex flex-wrap items-center gap-2 border-b border-gray-100" style={{ background: '#120600' }}>
                   <div className="flex gap-1">
                     {['All', 'Science', 'Maths'].map((f) => (
                       <button key={f} onClick={() => setSubjectFilter(f)}
@@ -700,7 +1328,7 @@ function StudentDetailModal({ student, scores, onClose }) {
                   <div className="overflow-y-auto" style={{ maxHeight: '340px' }}>
                     <table className="w-full text-sm">
                       <thead className="sticky top-0 z-10">
-                        <tr className="text-xs text-gray-500 uppercase" style={{ background: '#fdf6ee' }}>
+                        <tr className="text-xs text-gray-500 uppercase" style={{ background: '#120600' }}>
                           <th className="px-4 py-2 text-left cursor-pointer hover:text-amber-700 select-none"
                             onClick={() => setSortBy(sortBy === 'date-desc' ? 'date-asc' : 'date-desc')}>
                             Date {sortBy === 'date-desc' ? '↓' : sortBy === 'date-asc' ? '↑' : ''}
@@ -835,9 +1463,9 @@ function DeltaBadge({ delta }) {
 
 function ModalTopicTable({ topics, type }) {
   const cfg = {
-    strong:   { border: '#bbf7d0', bg: '#f0fdf4', hover: 'hover:bg-green-50',  color: 'text-green-700',  bar: '#16a34a' },
-    moderate: { border: '#fde68a', bg: '#fffbeb', hover: 'hover:bg-amber-50',  color: 'text-amber-600',  bar: '#c8860a' },
-    weak:     { border: '#fecaca', bg: '#fef2f2', hover: 'hover:bg-red-50',    color: 'text-red-600',    bar: '#ef4444' },
+    strong:   { border: 'rgba(22,163,74,0.25)',  bg: 'rgba(22,163,74,0.1)',   hover: 'hover:bg-green-50',  color: 'text-green-400',  bar: '#22c55e' },
+    moderate: { border: 'rgba(200,134,10,0.3)',  bg: 'rgba(200,134,10,0.1)',  hover: 'hover:bg-amber-50',  color: 'text-amber-400',  bar: '#c8860a' },
+    weak:     { border: 'rgba(239,68,68,0.25)',  bg: 'rgba(239,68,68,0.1)',   hover: 'hover:bg-red-50',    color: 'text-red-400',    bar: '#ef4444' },
   }[type]
   return (
     <div className="overflow-x-auto rounded-lg border" style={{ borderColor: cfg.border }}>
@@ -895,10 +1523,10 @@ function ChapterBarChart({ topics }) {
   return (
     <ResponsiveContainer width="100%" height={Math.max(220, data.length * 52 + 60)}>
       <ComposedChart data={data} margin={{ top: 16, right: 50, left: 0, bottom: 60 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#f0ebe4" />
+        <CartesianGrid strokeDasharray="3 3" stroke="rgba(200,134,10,0.12)" />
         <XAxis
           dataKey="topic"
-          tick={{ fontSize: 10 }}
+          tick={{ fontSize: 10, fill: '#9a7040' }}
           angle={-35}
           textAnchor="end"
           interval={0}
@@ -907,17 +1535,17 @@ function ChapterBarChart({ topics }) {
         <YAxis
           yAxisId="pct"
           domain={[0, 100]}
-          tick={{ fontSize: 10 }}
+          tick={{ fontSize: 10, fill: '#9a7040' }}
           unit="%"
-          label={{ value: 'Avg %', angle: -90, position: 'insideLeft', fontSize: 10, fill: '#9ca3af', offset: 10 }}
+          label={{ value: 'Avg %', angle: -90, position: 'insideLeft', fontSize: 10, fill: '#9a7040', offset: 10 }}
         />
         <YAxis
           yAxisId="cnt"
           orientation="right"
           domain={[0, maxCount + 1]}
-          tick={{ fontSize: 10 }}
+          tick={{ fontSize: 10, fill: '#9a7040' }}
           allowDecimals={false}
-          label={{ value: 'Tests', angle: 90, position: 'insideRight', fontSize: 10, fill: '#9ca3af', offset: 10 }}
+          label={{ value: 'Tests', angle: 90, position: 'insideRight', fontSize: 10, fill: '#9a7040', offset: 10 }}
         />
         <Tooltip
           content={({ active, payload }) => {
@@ -939,7 +1567,7 @@ function ChapterBarChart({ topics }) {
         <ReferenceLine yAxisId="pct" y={60} stroke="#c8860a" strokeDasharray="4 3" strokeWidth={1}
           label={{ value: '60%', position: 'insideTopRight', fontSize: 9, fill: '#c8860a' }} />
         <Bar yAxisId="pct" dataKey="avg" radius={[4, 4, 0, 0]}
-          label={{ position: 'top', fontSize: 9, fill: '#6b7280', formatter: (v) => `${v}%` }}
+          label={{ position: 'top', fontSize: 9, fill: '#9a7040', formatter: (v) => `${v}%` }}
         >
           {data.map((entry, i) => <Cell key={i} fill={entry.fill} />)}
         </Bar>
@@ -958,12 +1586,12 @@ function ChapterBarChart({ topics }) {
 }
 
 function MiniStat({ label, value, highlight, positive, negative }) {
-  let style = { background: '#fdf6ee' }
-  let labelColor = '#6b7280'
-  let valueColor = NAV
-  if (highlight) { style = { background: DARK, border: `1px solid ${GOLD}` }; labelColor = '#e0a030'; valueColor = GOLD }
-  if (positive)  { style = { background: '#f0fdf4', border: '1px solid #bbf7d0' }; labelColor = '#166534'; valueColor = '#16a34a' }
-  if (negative)  { style = { background: '#fef2f2', border: '1px solid #fecaca' }; labelColor = '#991b1b'; valueColor = '#ef4444' }
+  let style = { background: '#1a0800', border: '1px solid #e5e7eb' }
+  let labelColor = '#9ca3af'
+  let valueColor = '#1e293b'
+  if (highlight) { style = { background: '#fffbf2', border: `1px solid ${GOLD}` }; labelColor = '#92400e'; valueColor = GOLD }
+  if (positive)  { style = { background: 'rgba(22,163,74,0.08)', border: '1px solid rgba(22,163,74,0.25)' }; labelColor = '#16a34a'; valueColor = '#15803d' }
+  if (negative)  { style = { background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)' }; labelColor = '#ef4444'; valueColor = '#dc2626' }
   return (
     <div className="rounded-lg p-3 text-center" style={style}>
       <p className="text-xs mb-1" style={{ color: labelColor }}>{label}</p>

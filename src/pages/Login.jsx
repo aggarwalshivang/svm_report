@@ -2,6 +2,10 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 
+const GOLD = '#c8860a'
+const NAV  = '#2d1200'
+const DARK = '#1a0800'
+
 export default function Login() {
   const navigate = useNavigate()
   const [role, setRole] = useState('student')
@@ -78,20 +82,26 @@ export default function Login() {
     setResetSent(true)
   }
 
+  const inputStyle = {
+    background: 'rgba(10,3,0,0.6)',
+    border: '1px solid rgba(200,134,10,0.25)',
+    color: '#f5ede0',
+  }
+
   return (
-    <div className="min-h-screen flex items-center justify-center p-4" style={{ background: 'linear-gradient(135deg, #1a0800 0%, #3d1a00 60%, #2a1000 100%)' }}>
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-5 sm:p-8">
+    <div className="min-h-screen flex items-center justify-center p-4" style={{ background: '#1a0800' }}>
+      <div className="rounded-2xl shadow-2xl w-full max-w-md p-5 sm:p-8" style={{ background: '#2d1200', border: '1px solid rgba(200,134,10,0.2)' }}>
         {/* Header */}
         <div className="text-center mb-8">
-          <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4" style={{ background: '#c8860a' }}>
-            <span className="text-white text-2xl font-bold">SVM</span>
+          <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4" style={{ background: GOLD }}>
+            <span className="text-3xl font-black text-white">S</span>
           </div>
-          <h1 className="text-2xl font-bold text-gray-800">Saraswati Vidya Mandir</h1>
-          <p className="text-gray-500 mt-1">Student Report Portal</p>
+          <h1 className="text-2xl font-bold" style={{ color: '#f5ede0' }}>Saraswati Vidya Mandir</h1>
+          <p className="text-sm mt-1" style={{ color: '#9a7040' }}>Student Report Portal</p>
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-gray-200 mb-6">
+        <div className="flex mb-6" style={{ borderBottom: '1px solid rgba(200,134,10,0.2)' }}>
           {[
             { key: 'student', label: '🎓 Student' },
             { key: 'teacher', label: '👨‍🏫 Teacher' },
@@ -100,11 +110,11 @@ export default function Login() {
               key={key}
               type="button"
               onClick={() => { setRole(key); setError(''); setPassword('') }}
-              className={`flex-1 py-3 text-sm font-semibold transition-all border-b-2 -mb-px ${
-                role === key
-                  ? 'border-[#c8860a] text-[#c8860a]'
-                  : 'border-transparent text-gray-400 hover:text-gray-600'
-              }`}
+              className="flex-1 py-3 text-sm font-semibold transition-all border-b-2 -mb-px"
+              style={role === key
+                ? { borderColor: GOLD, color: GOLD }
+                : { borderColor: 'transparent', color: '#7a5030' }
+              }
             >
               {label}
             </button>
@@ -114,45 +124,46 @@ export default function Login() {
         {forgotMode ? (
           resetSent ? (
             <div className="text-center space-y-4">
-              <div className="w-14 h-14 rounded-full flex items-center justify-center mx-auto" style={{ background: '#fef3d0' }}>
+              <div className="w-14 h-14 rounded-full flex items-center justify-center mx-auto" style={{ background: 'rgba(200,134,10,0.15)' }}>
                 <span className="text-2xl">📧</span>
               </div>
-              <p className="font-semibold text-gray-800">Reset link sent!</p>
-              <p className="text-sm text-gray-500">Check <span className="font-medium">{email}</span> for the password reset link.</p>
+              <p className="font-semibold" style={{ color: '#f5ede0' }}>Reset link sent!</p>
+              <p className="text-sm" style={{ color: '#9a7040' }}>Check <span className="font-medium" style={{ color: '#d4b483' }}>{email}</span> for the password reset link.</p>
               <button
                 onClick={() => { setForgotMode(false); setResetSent(false); setError('') }}
                 className="text-sm font-medium"
-                style={{ color: '#c8860a' }}
+                style={{ color: GOLD }}
               >
                 ← Back to Login
               </button>
             </div>
           ) : (
             <form onSubmit={handleForgotPassword} className="space-y-4">
-              <p className="text-sm text-gray-500">Enter your teacher email and we'll send a password reset link.</p>
+              <p className="text-sm" style={{ color: '#9a7040' }}>Enter your teacher email and we'll send a password reset link.</p>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Teacher Email</label>
+                <label className="block text-sm font-medium mb-1" style={{ color: '#d4b483' }}>Teacher Email</label>
                 <input
                   type="email"
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="admin@saraswatividyamandir.com"
-                  className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:outline-none text-gray-800"
+                  className="w-full px-4 py-3 rounded-lg focus:outline-none"
+                  style={inputStyle}
                   onFocus={(e) => e.target.style.boxShadow = '0 0 0 2px #c8860a40'}
                   onBlur={(e) => e.target.style.boxShadow = ''}
                 />
               </div>
               {error && (
-                <div className="bg-red-50 border border-red-200 text-red-600 rounded-lg px-4 py-3 text-sm">{error}</div>
+                <div className="rounded-lg px-4 py-3 text-sm" style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.25)', color: '#f87171' }}>{error}</div>
               )}
               <button
                 type="submit"
                 disabled={loading}
                 className="w-full text-white font-semibold py-3 rounded-lg transition-all"
-                style={{ background: loading ? '#a06d08' : '#c8860a' }}
-                onMouseEnter={(e) => { if (!loading) e.target.style.background = '#a06d08' }}
-                onMouseLeave={(e) => { if (!loading) e.target.style.background = '#c8860a' }}
+                style={{ background: loading ? '#a06d08' : GOLD }}
+                onMouseEnter={(e) => { if (!loading) e.currentTarget.style.background = '#a06d08' }}
+                onMouseLeave={(e) => { if (!loading) e.currentTarget.style.background = GOLD }}
               >
                 {loading ? 'Sending…' : 'Send Reset Link'}
               </button>
@@ -160,7 +171,7 @@ export default function Login() {
                 type="button"
                 onClick={() => { setForgotMode(false); setError('') }}
                 className="w-full text-sm font-medium py-2"
-                style={{ color: '#c8860a' }}
+                style={{ color: GOLD }}
               >
                 ← Back to Login
               </button>
@@ -169,7 +180,7 @@ export default function Login() {
         ) : (
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium mb-1" style={{ color: '#d4b483' }}>
                 Email Address
               </label>
               <input
@@ -178,8 +189,8 @@ export default function Login() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder={role === 'student' ? 'your@gmail.com' : 'admin@saraswatividyamandir.com'}
-                className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 text-gray-800"
-                style={{ '--tw-ring-color': '#c8860a' }}
+                className="w-full px-4 py-3 rounded-lg focus:outline-none"
+                style={inputStyle}
                 onFocus={(e) => e.target.style.boxShadow = '0 0 0 2px #c8860a40'}
                 onBlur={(e) => e.target.style.boxShadow = ''}
               />
@@ -188,12 +199,12 @@ export default function Login() {
             {role === 'teacher' && (
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className="block text-sm font-medium text-gray-700">Password</label>
+                  <label className="block text-sm font-medium" style={{ color: '#d4b483' }}>Password</label>
                   <button
                     type="button"
                     onClick={() => { setForgotMode(true); setError('') }}
                     className="text-xs font-medium"
-                    style={{ color: '#c8860a' }}
+                    style={{ color: GOLD }}
                   >
                     Forgot password?
                   </button>
@@ -204,7 +215,8 @@ export default function Login() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Enter password"
-                  className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:outline-none text-gray-800"
+                  className="w-full px-4 py-3 rounded-lg focus:outline-none"
+                  style={inputStyle}
                   onFocus={(e) => e.target.style.boxShadow = '0 0 0 2px #c8860a40'}
                   onBlur={(e) => e.target.style.boxShadow = ''}
                 />
@@ -212,13 +224,13 @@ export default function Login() {
             )}
 
             {role === 'student' && (
-              <p className="text-xs text-gray-400">
+              <p className="text-xs" style={{ color: '#9a7040' }}>
                 Enter the email address linked to your account. No password required.
               </p>
             )}
 
             {error && (
-              <div className="bg-red-50 border border-red-200 text-red-600 rounded-lg px-4 py-3 text-sm">
+              <div className="rounded-lg px-4 py-3 text-sm" style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.25)', color: '#f87171' }}>
                 {error}
               </div>
             )}
@@ -227,9 +239,9 @@ export default function Login() {
               type="submit"
               disabled={loading}
               className="w-full text-white font-semibold py-3 rounded-lg transition-all"
-              style={{ background: loading ? '#a06d08' : '#c8860a' }}
-              onMouseEnter={(e) => { if (!loading) e.target.style.background = '#a06d08' }}
-              onMouseLeave={(e) => { if (!loading) e.target.style.background = '#c8860a' }}
+              style={{ background: loading ? '#a06d08' : GOLD }}
+              onMouseEnter={(e) => { if (!loading) e.currentTarget.style.background = '#a06d08' }}
+              onMouseLeave={(e) => { if (!loading) e.currentTarget.style.background = GOLD }}
             >
               {loading ? 'Checking…' : 'Login'}
             </button>

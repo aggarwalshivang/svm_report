@@ -148,36 +148,47 @@ export default function StudentDashboard() {
   }, [scores, subjectFilter, sortBy])
 
   if (loading) return (
-    <div className="min-h-screen flex items-center justify-center" style={{ background: '#f8f3ed' }}>
-      <div className="font-medium" style={{ color: GOLD }}>Loading your report…</div>
+    <div className="min-h-screen dark-theme flex items-center justify-center" style={{ background: '#1a0800' }}>
+      <div className="text-center">
+        <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4" style={{ background: NAV }}>
+          <span className="text-lg font-black" style={{ color: GOLD }}>S</span>
+        </div>
+        <p className="font-semibold text-sm" style={{ color: '#b89060' }}>Loading your report…</p>
+      </div>
     </div>
   )
 
   return (
-    <div className="min-h-screen" style={{ background: '#f8f3ed' }}>
+    <div className="min-h-screen dark-theme" style={{ background: '#1a0800' }}>
       {/* Navbar */}
-      <nav className="text-white px-4 py-3 flex items-center justify-between shadow-lg" style={{ background: NAV }}>
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="font-bold text-base flex-shrink-0">SVM</span>
-          <span className="px-2 py-0.5 rounded-full text-xs font-medium truncate max-w-[140px] sm:max-w-none" style={{ background: GOLD }}>
-            {session?.studentName}
-          </span>
-          <span className="px-2 py-0.5 rounded-full text-xs font-bold flex-shrink-0" style={{ background: DARK }}>
-            Cl.{session?.class}
-          </span>
+      <nav className="text-white px-5 py-3 flex items-center justify-between" style={{ background: NAV, borderBottom: `2px solid ${GOLD}`, boxShadow: '0 2px 8px rgba(0,0,0,0.15)' }}>
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: GOLD }}>
+            <span className="text-lg font-black text-white">S</span>
+          </div>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="font-semibold text-sm hidden sm:block">Saraswati Vidya Mandir</span>
+              <span className="font-bold text-sm sm:hidden">SVM</span>
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold flex-shrink-0" style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.2)' }}>
+                Class {session?.class}
+              </span>
+            </div>
+            <p className="text-xs font-semibold truncate mt-0.5" style={{ color: GOLD }}>{session?.studentName}</p>
+          </div>
         </div>
         <button
           onClick={logout}
-          className="text-xs px-3 py-1.5 rounded-lg font-medium transition flex-shrink-0"
-          style={{ background: DARK }}
-          onMouseEnter={(e) => e.target.style.background = GOLD}
-          onMouseLeave={(e) => e.target.style.background = DARK}
+          className="text-xs px-3 py-1.5 rounded-lg font-medium transition flex-shrink-0 border"
+          style={{ background: 'transparent', borderColor: 'rgba(255,255,255,0.2)', color: '#d4b483' }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = GOLD; e.currentTarget.style.borderColor = GOLD; e.currentTarget.style.color = 'white' }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.2)'; e.currentTarget.style.color = '#d4b483' }}
         >
           Logout
         </button>
       </nav>
 
-      <div className="max-w-6xl mx-auto p-3 sm:p-6 space-y-4">
+      <div className="max-w-6xl mx-auto p-3 sm:p-6 space-y-5">
 
         {/* ── SUMMARY ROW ── */}
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
@@ -197,15 +208,18 @@ export default function StudentDashboard() {
         <div className="grid md:grid-cols-3 gap-3">
           {/* Trend line */}
           <div className="md:col-span-2 bg-white rounded-xl shadow p-3 sm:p-4">
-            <h2 className="text-sm font-semibold mb-2" style={{ color: NAV }}>Score Trend (%)</h2>
+            <h2 className="text-sm font-semibold mb-3 flex items-center gap-2" style={{ color: NAV }}>
+              <span className="inline-block w-1 h-4 rounded-full" style={{ background: GOLD }} />
+              Score Trend (%)
+            </h2>
             {trendData.length === 0
               ? <p className="text-xs text-gray-400 py-8 text-center">No data yet.</p>
               : (
                 <ResponsiveContainer width="100%" height={180}>
                   <LineChart data={trendData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0ebe4" />
-                    <XAxis dataKey="date" tick={{ fontSize: 10 }} minTickGap={48} interval="preserveStartEnd" />
-                    <YAxis domain={[0, 100]} tick={{ fontSize: 10 }} unit="%" />
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(200,134,10,0.12)" />
+                    <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#9a7040' }} minTickGap={48} interval="preserveStartEnd" />
+                    <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: '#9a7040' }} unit="%" />
                     <ReferenceLine y={80} stroke="#16a34a" strokeDasharray="4 3" strokeWidth={1.5}
                       label={{ value: '80%', position: 'insideTopRight', fontSize: 10, fill: '#16a34a' }} />
                     <Tooltip formatter={(v) => `${v}%`} />
@@ -225,12 +239,15 @@ export default function StudentDashboard() {
           {/* Subject avg + recent tests */}
           <div className="flex flex-col gap-3">
             <div className="bg-white rounded-xl shadow p-3 sm:p-4">
-              <h2 className="text-sm font-semibold mb-2" style={{ color: NAV }}>Subject Avg</h2>
+              <h2 className="text-sm font-semibold mb-3 flex items-center gap-2" style={{ color: NAV }}>
+                <span className="inline-block w-1 h-4 rounded-full" style={{ background: GOLD }} />
+                Subject Avg
+              </h2>
               <ResponsiveContainer width="100%" height={100}>
                 <BarChart data={subjectChartData} barSize={32}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0ebe4" />
-                  <XAxis dataKey="subject" tick={{ fontSize: 11 }} />
-                  <YAxis domain={[0, 100]} tick={{ fontSize: 10 }} unit="%" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(200,134,10,0.12)" />
+                  <XAxis dataKey="subject" tick={{ fontSize: 11, fill: '#9a7040' }} />
+                  <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: '#9a7040' }} unit="%" />
                   <Tooltip formatter={(v) => `${v}%`} />
                   <Bar dataKey="avg" radius={[6, 6, 0, 0]} fill={GOLD} />
                 </BarChart>
@@ -238,7 +255,10 @@ export default function StudentDashboard() {
             </div>
 
             <div className="bg-white rounded-xl shadow p-3 sm:p-4 flex-1">
-              <h2 className="text-sm font-semibold mb-2" style={{ color: NAV }}>Recent Tests</h2>
+              <h2 className="text-sm font-semibold mb-3 flex items-center gap-2" style={{ color: NAV }}>
+                <span className="inline-block w-1 h-4 rounded-full" style={{ background: GOLD }} />
+                Recent Tests
+              </h2>
               <div className="space-y-2">
                 {recentTests.length === 0 && <p className="text-xs text-gray-400">No tests yet.</p>}
                 {recentTests.map((s) => {
@@ -295,7 +315,7 @@ export default function StudentDashboard() {
           {tab === 'all' && (
             <>
               {/* Filter + Sort bar */}
-              <div className="px-3 sm:px-5 py-2.5 flex flex-wrap items-center gap-2 border-b border-gray-100" style={{ background: '#fdfaf6' }}>
+              <div className="px-3 sm:px-5 py-2.5 flex flex-wrap items-center gap-2 border-b border-gray-100" style={{ background: '#f8fafc' }}>
                 <div className="flex gap-1.5">
                   {['All', 'Science', 'Maths'].map((f) => (
                     <button key={f} onClick={() => setSubjectFilter(f)}
@@ -330,7 +350,7 @@ export default function StudentDashboard() {
                 <div className="overflow-y-auto" style={{ maxHeight: '420px' }}>
                   <table className="w-full text-sm">
                     <thead className="sticky top-0 z-10">
-                      <tr className="text-left text-xs text-gray-500 uppercase tracking-wide" style={{ background: '#fdf6ee' }}>
+                      <tr className="text-left text-xs text-gray-500 uppercase tracking-wide" style={{ background: '#f8fafc' }}>
                         <th className="px-5 py-3 cursor-pointer hover:text-amber-700 select-none"
                           onClick={() => setSortBy(sortBy === 'date-desc' ? 'date-asc' : 'date-desc')}>
                           Date {sortBy === 'date-desc' ? '↓' : sortBy === 'date-asc' ? '↑' : ''}
@@ -427,11 +447,11 @@ function DeltaBadge({ delta }) {
 function TopicTable({ topics, type }) {
   const isStrong = type === 'strong'
   return (
-    <div className="overflow-x-auto rounded-lg border" style={{ borderColor: isStrong ? '#bbf7d0' : '#fecaca' }}>
+    <div className="overflow-x-auto rounded-lg border" style={{ borderColor: isStrong ? 'rgba(22,163,74,0.25)' : 'rgba(239,68,68,0.25)' }}>
       <table className="w-full text-sm">
         <thead>
           <tr className="text-left text-xs text-gray-500 uppercase tracking-wide"
-            style={{ background: isStrong ? '#f0fdf4' : '#fef2f2' }}>
+            style={{ background: isStrong ? 'rgba(22,163,74,0.1)' : 'rgba(239,68,68,0.1)' }}>
             <th className="px-4 py-3">Chapter / Topic</th>
             <th className="px-4 py-3">Subject</th>
             <th className="px-4 py-3 text-center">Tests</th>
@@ -472,18 +492,21 @@ function TopicTable({ topics, type }) {
 
 function StatCard({ label, value, sub, type }) {
   const styles = {
-    gold:  { background: '#fef3d0', color: '#7a5100', border: '1px solid #f0d080', sub: '#a07030' },
-    green: { background: '#f0fdf4', color: '#166534', border: '1px solid #bbf7d0', sub: '#16a34a' },
-    red:   { background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca', sub: '#dc2626' },
-    brown: { background: '#fdf6ee', color: '#6b4c1e', border: '1px solid #e8d5b0', sub: '#92623a' },
-    rank:  { background: '#1a0800', color: '#c8860a', border: '1px solid #c8860a', sub: '#e0a030' },
+    gold:  { accent: '#c8860a',  subColor: '#6b7280' },
+    green: { accent: '#22c55e',  subColor: '#6b7280' },
+    red:   { accent: '#ef4444',  subColor: '#6b7280' },
+    brown: { accent: '#f59e0b',  subColor: '#6b7280' },
+    rank:  { accent: '#c8860a',  subColor: '#6b7280' },
   }
   const s = styles[type]
   return (
-    <div className="rounded-xl p-5" style={{ background: s.background, border: s.border }}>
-      <p className="text-xs font-medium mb-1" style={{ color: s.sub }}>{label}</p>
-      <p className="text-2xl font-bold" style={{ color: s.color }}>{value}</p>
-      {sub && <p className="text-xs mt-1" style={{ color: s.sub }}>{sub}</p>}
+    <div className="bg-white rounded-xl overflow-hidden shadow-sm border border-gray-100">
+      <div className="h-1 w-full" style={{ background: s.accent }} />
+      <div className="px-5 py-4">
+        <p className="text-[11px] font-semibold uppercase tracking-wider mb-1.5 text-gray-400">{label}</p>
+        <p className="text-2xl font-bold leading-tight text-gray-800">{value}</p>
+        {sub && <p className="text-xs mt-1.5 text-gray-500">{sub}</p>}
+      </div>
     </div>
   )
 }

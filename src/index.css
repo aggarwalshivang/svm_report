@@ -4,7 +4,8 @@
 
 body {
   margin: 0;
-  background: #f8f3ed;
+  background: #1a0800;
+  min-height: 100vh;
   font-family: system-ui, -apple-system, sans-serif;
   -webkit-tap-highlight-color: transparent;
 }
@@ -16,3 +17,37 @@ body {
   width: 100%;
   text-align: left;
 }
+
+/* ── Dark Dashboard Theme ── */
+.dark-theme .text-gray-800 { color: #f5ede0 !important; }
+.dark-theme .text-gray-700 { color: #f0e0c8 !important; }
+.dark-theme .text-gray-600 { color: #d4b483 !important; }
+.dark-theme .text-gray-500 { color: #b89060 !important; }
+.dark-theme .text-gray-400 { color: #9a7040 !important; }
+.dark-theme .text-gray-300 { color: rgba(200,134,10,0.35) !important; }
+
+.dark-theme .bg-white    { background: #2d1200 !important; }
+.dark-theme .bg-gray-50  { background: rgba(0,0,0,0.2) !important; }
+.dark-theme .bg-gray-100 { background: rgba(255,255,255,0.06) !important; }
+
+.dark-theme .border-gray-100 { border-color: rgba(200,134,10,0.12) !important; }
+.dark-theme .border-gray-200 { border-color: rgba(200,134,10,0.2)  !important; }
+.dark-theme .border-b        { border-bottom-color: rgba(200,134,10,0.12) !important; }
+
+.dark-theme .divide-y > :not([hidden]) ~ :not([hidden]) {
+  border-top-color: rgba(200,134,10,0.1) !important;
+}
+
+.dark-theme .bg-green-100  { background: rgba(22,163,74,0.15) !important; }
+.dark-theme .bg-orange-100 { background: rgba(234,88,12,0.12) !important; }
+
+.dark-theme .hover\:bg-amber-50:hover { background: rgba(200,134,10,0.08) !important; }
+.dark-theme .hover\:bg-green-50:hover { background: rgba(22,163,74,0.08)  !important; }
+.dark-theme .hover\:bg-red-50:hover   { background: rgba(239,68,68,0.08)  !important; }
+
+.dark-theme input {
+  background: #1a0800 !important;
+  color: #f5ede0 !important;
+  border-color: rgba(200,134,10,0.25) !important;
+}
+.dark-theme input::placeholder { color: #7a5030 !important; }
