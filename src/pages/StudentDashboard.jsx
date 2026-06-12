@@ -1,8 +1,8 @@
 import { useEffect, useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  BarChart, Bar, ResponsiveContainer, RadialBarChart, RadialBar,
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine,
+  BarChart, Bar, ResponsiveContainer,
 } from 'recharts'
 import { supabase } from '../lib/supabase'
 
@@ -102,12 +102,27 @@ export default function StudentDashboard() {
   const strongTopics = useMemo(() => topicStats.filter((t) => t.avg >= 80).sort((a, b) => b.avg - a.avg), [topicStats])
   const weakTopics   = useMemo(() => topicStats.filter((t) => t.avg <  80).sort((a, b) => a.avg - b.avg), [topicStats])
 
-  // Chart data
-  const trendData = appeared.map((s) => ({
-    date: s.date.slice(5),
-    pct:  +((s.score_obtained / s.total_marks) * 100).toFixed(1),
-    subject: s.subject,
-  }))
+  // Chart data — sorted by date for the trend line
+  const trendData = [...appeared]
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map((s) => ({
+      date: s.date.slice(5),
+      pct:  +((s.score_obtained / s.total_marks) * 100).toFixed(1),
+      subject: s.subject,
+    }))
+
+  // Delta map: change vs previous test, keyed by score id
+  const deltaMap = useMemo(() => {
+    const sorted = [...appeared].sort((a, b) => a.date.localeCompare(b.date))
+    const map = {}
+    sorted.forEach((s, i) => {
+      if (i === 0) { map[s.id] = null; return }
+      const prevPct = (sorted[i - 1].score_obtained / sorted[i - 1].total_marks) * 100
+      const currPct = (s.score_obtained / s.total_marks) * 100
+      map[s.id] = +(currPct - prevPct).toFixed(1)
+    })
+    return map
+  }, [appeared])
 
   const subjectChartData = [
     { subject: 'Science', avg: Number(sciAvg) },
@@ -193,8 +208,16 @@ export default function StudentDashboard() {
                     <CartesianGrid strokeDasharray="3 3" stroke="#f0ebe4" />
                     <XAxis dataKey="date" tick={{ fontSize: 10 }} minTickGap={48} interval="preserveStartEnd" />
                     <YAxis domain={[0, 100]} tick={{ fontSize: 10 }} unit="%" />
+                    <ReferenceLine y={80} stroke="#16a34a" strokeDasharray="4 3" strokeWidth={1.5}
+                      label={{ value: '80%', position: 'insideTopRight', fontSize: 10, fill: '#16a34a' }} />
                     <Tooltip formatter={(v) => `${v}%`} />
-                    <Line type="monotone" dataKey="pct" stroke={GOLD} dot={{ r: 3, fill: GOLD }} strokeWidth={2} name="Score %" />
+                    <Line type="monotone" dataKey="pct" stroke={GOLD} strokeWidth={2} name="Score %"
+                      dot={(props) => {
+                        const { cx, cy, payload } = props
+                        const color = payload.pct >= 80 ? '#16a34a' : '#ef4444'
+                        return <circle key={`dot-${cx}-${cy}`} cx={cx} cy={cy} r={3.5} fill={color} stroke="white" strokeWidth={1} />
+                      }}
+                    />
                   </LineChart>
                 </ResponsiveContainer>
               )
@@ -325,11 +348,13 @@ export default function StudentDashboard() {
                           onClick={() => setSortBy(sortBy === 'pct-desc' ? 'pct-asc' : 'pct-desc')}>
                           % {sortBy === 'pct-desc' ? '↓' : sortBy === 'pct-asc' ? '↑' : ''}
                         </th>
+                        <th className="px-5 py-3 text-center hidden sm:table-cell">Δ</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-50">
                       {displayedScores.map((s) => {
-                        const pct = s.is_absent ? null : ((s.score_obtained / s.total_marks) * 100).toFixed(1)
+                        const pct   = s.is_absent ? null : +((s.score_obtained / s.total_marks) * 100).toFixed(1)
+                        const delta = s.is_absent ? null : deltaMap[s.id]
                         return (
                           <tr key={s.id} className="hover:bg-amber-50 transition">
                             <td className="px-5 py-3 text-gray-600 text-xs">{s.date}</td>
@@ -347,6 +372,9 @@ export default function StudentDashboard() {
                               {pct !== null
                                 ? <span className={`font-bold text-sm ${pct >= 80 ? 'text-green-600' : pct >= 60 ? 'text-amber-600' : 'text-red-500'}`}>{pct}%</span>
                                 : '—'}
+                            </td>
+                            <td className="px-5 py-3 text-center hidden sm:table-cell">
+                              <DeltaBadge delta={delta} />
                             </td>
                           </tr>
                         )
@@ -382,6 +410,19 @@ export default function StudentDashboard() {
         </div>
       </div>
     </div>
+  )
+}
+
+function DeltaBadge({ delta }) {
+  if (delta === null || delta === undefined) return <span className="text-gray-300 text-xs">—</span>
+  if (delta === 0) return <span className="text-xs text-gray-400">±0</span>
+  const positive = delta > 0
+  return (
+    <span className={`inline-flex items-center gap-0.5 text-xs font-semibold px-1.5 py-0.5 rounded ${
+      positive ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'
+    }`}>
+      {positive ? '▲' : '▼'} {positive ? '+' : ''}{delta}%
+    </span>
   )
 }
 

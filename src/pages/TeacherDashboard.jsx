@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine,
   ResponsiveContainer, LineChart, Line,
 } from 'recharts'
 import { supabase } from '../lib/supabase'
@@ -276,6 +276,19 @@ function StudentDetailModal({ student, scores, onClose }) {
     { subject: 'Maths',   avg: mathRows.length ? +(mathRows.reduce((a, s) => a + (s.score_obtained / s.total_marks) * 100, 0) / mathRows.length).toFixed(1) : 0 },
   ]
 
+  // Delta per score vs previous test (by date order)
+  const deltaMap = useMemo(() => {
+    const sorted = [...appeared].sort((a, b) => a.date.localeCompare(b.date))
+    const map = {}
+    sorted.forEach((s, i) => {
+      if (i === 0) { map[s.id] = null; return }
+      const prev = (sorted[i - 1].score_obtained / sorted[i - 1].total_marks) * 100
+      const curr = (s.score_obtained / s.total_marks) * 100
+      map[s.id] = +(curr - prev).toFixed(1)
+    })
+    return map
+  }, [appeared])
+
   const topicMap = {}
   appeared.forEach((s) => {
     const key = s.topic_name
@@ -326,8 +339,16 @@ function StudentDetailModal({ student, scores, onClose }) {
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0ebe4" />
                   <XAxis dataKey="date" tick={{ fontSize: 10 }} minTickGap={48} interval="preserveStartEnd" />
                   <YAxis domain={[0, 100]} tick={{ fontSize: 10 }} unit="%" />
+                  <ReferenceLine y={80} stroke="#16a34a" strokeDasharray="4 3" strokeWidth={1.5}
+                    label={{ value: '80%', position: 'insideTopRight', fontSize: 9, fill: '#16a34a' }} />
                   <Tooltip formatter={(v) => `${v}%`} />
-                  <Line type="monotone" dataKey="pct" stroke={GOLD} dot={{ r: 3, fill: GOLD }} strokeWidth={2} />
+                  <Line type="monotone" dataKey="pct" stroke={GOLD} strokeWidth={2}
+                    dot={(props) => {
+                      const { cx, cy, payload } = props
+                      const color = payload.pct >= 80 ? '#16a34a' : '#ef4444'
+                      return <circle key={`dot-${cx}-${cy}`} cx={cx} cy={cy} r={3} fill={color} stroke="white" strokeWidth={1} />
+                    }}
+                  />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -419,11 +440,13 @@ function StudentDetailModal({ student, scores, onClose }) {
                             onClick={() => setSortBy(sortBy === 'pct-desc' ? 'pct-asc' : 'pct-desc')}>
                             % {sortBy === 'pct-desc' ? '↓' : sortBy === 'pct-asc' ? '↑' : ''}
                           </th>
+                          <th className="px-4 py-2 text-center hidden sm:table-cell">Δ</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-50">
                         {displayed.map((s) => {
-                          const pct = s.is_absent ? null : ((s.score_obtained / s.total_marks) * 100).toFixed(1)
+                          const pct   = s.is_absent ? null : +((s.score_obtained / s.total_marks) * 100).toFixed(1)
+                          const delta = s.is_absent ? null : deltaMap[s.id]
                           return (
                             <tr key={s.id} className="hover:bg-amber-50">
                               <td className="px-4 py-2 text-gray-500 text-xs">{s.date}</td>
@@ -439,6 +462,9 @@ function StudentDetailModal({ student, scores, onClose }) {
                                 {pct !== null
                                   ? <span className={`font-bold text-xs ${pct >= 80 ? 'text-green-600' : pct >= 60 ? 'text-amber-600' : 'text-red-500'}`}>{pct}%</span>
                                   : '—'}
+                              </td>
+                              <td className="px-4 py-2 text-center hidden sm:table-cell">
+                                <DeltaBadge delta={delta} />
                               </td>
                             </tr>
                           )
@@ -473,6 +499,19 @@ function StudentDetailModal({ student, scores, onClose }) {
         </div>
       </div>
     </div>
+  )
+}
+
+function DeltaBadge({ delta }) {
+  if (delta === null || delta === undefined) return <span className="text-gray-300 text-xs">—</span>
+  if (delta === 0) return <span className="text-xs text-gray-400">±0</span>
+  const positive = delta > 0
+  return (
+    <span className={`inline-flex items-center gap-0.5 text-xs font-semibold px-1.5 py-0.5 rounded ${
+      positive ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'
+    }`}>
+      {positive ? '▲' : '▼'} {positive ? '+' : ''}{delta}%
+    </span>
   )
 }
 
