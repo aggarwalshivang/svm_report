@@ -35,20 +35,34 @@ export default function StudentDashboard() {
   useEffect(() => {
     if (!session?.studentId || !session?.class) return
     async function computeRank() {
-      // Fetch classmates and all scores in parallel
-      const [{ data: classmates }, { data: allScores }] = await Promise.all([
-        supabase.from('student_emails').select('student_id').eq('class', session.class),
-        supabase.from('student_scores').select('student_id, score_obtained, total_marks, is_absent'),
-      ])
+      // Fetch classmates (deduplicate by student_id)
+      const { data: classmates } = await supabase
+        .from('student_emails')
+        .select('student_id')
+        .eq('class', session.class)
 
       if (!classmates?.length) return
-      setClassSize(classmates.length)
+      const uniqueIds = [...new Set(classmates.map((s) => String(s.student_id)).filter(Boolean))]
+      setClassSize(uniqueIds.length)
 
-      // Build avg map — default every classmate to 0
-      const classmateIds = classmates.map((s) => String(s.student_id)).filter(Boolean)
-      const avgMap = Object.fromEntries(classmateIds.map((id) => [id, { total: 0, count: 0 }]))
+      // Page through all scores (avoid 1000-row default cap)
+      const PAGE = 1000
+      let allScores = []
+      let from = 0
+      while (true) {
+        const { data, error } = await supabase
+          .from('student_scores')
+          .select('student_id, score_obtained, total_marks, is_absent')
+          .range(from, from + PAGE - 1)
+        if (error || !data || data.length === 0) break
+        allScores = allScores.concat(data)
+        if (data.length < PAGE) break
+        from += PAGE
+      }
 
-      ;(allScores || []).forEach((r) => {
+      // Build avg map — default every unique classmate to 0
+      const avgMap = Object.fromEntries(uniqueIds.map((id) => [id, { total: 0, count: 0 }]))
+      allScores.forEach((r) => {
         const key = String(r.student_id)
         if (!avgMap[key] || r.is_absent) return
         avgMap[key].total += (r.score_obtained / r.total_marks) * 100
@@ -97,8 +111,9 @@ export default function StudentDashboard() {
     return Object.values(map).map((t) => ({ ...t, avg: +(t.total / t.count).toFixed(1), best: +t.best.toFixed(1), worst: +t.worst.toFixed(1) }))
   }, [appeared])
 
-  const strongTopics = useMemo(() => topicStats.filter((t) => t.avg >= 80).sort((a, b) => b.avg - a.avg), [topicStats])
-  const weakTopics   = useMemo(() => topicStats.filter((t) => t.avg <  80).sort((a, b) => a.avg - b.avg), [topicStats])
+  const strongTopics   = useMemo(() => topicStats.filter((t) => t.avg >= 80).sort((a, b) => b.avg - a.avg), [topicStats])
+  const moderateTopics = useMemo(() => topicStats.filter((t) => t.avg >= 60 && t.avg < 80).sort((a, b) => b.avg - a.avg), [topicStats])
+  const weakTopics     = useMemo(() => topicStats.filter((t) => t.avg <  60).sort((a, b) => a.avg - b.avg), [topicStats])
 
   // Chart data — sorted by date for the trend line
   const trendData = [...appeared]
@@ -168,7 +183,7 @@ export default function StudentDashboard() {
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <span className="font-semibold text-sm hidden sm:block">Saraswati Vidya Mandir</span>
+              <span className="font-semibold text-sm hidden sm:block">Saraswati VidyaMandir</span>
               <span className="font-bold text-sm sm:hidden">SVM</span>
               <span className="px-1.5 py-0.5 rounded text-[10px] font-bold flex-shrink-0" style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.2)' }}>
                 Class {session?.class}
@@ -288,9 +303,10 @@ export default function StudentDashboard() {
           {/* Tab bar — scrollable on mobile */}
           <div className="flex border-b border-gray-100 overflow-x-auto scrollbar-none" style={{ WebkitOverflowScrolling: 'touch' }}>
             {[
-              { key: 'all',    label: '📋 All Tests',       count: scores.length },
-              { key: 'strong', label: '🏆 Strong (≥80%)',   count: strongTopics.length },
-              { key: 'weak',   label: '⚠️ Weak (<80%)',     count: weakTopics.length },
+              { key: 'all',      label: '📋 All Tests',         count: scores.length },
+              { key: 'strong',   label: '🏆 Strong (≥80%)',     count: strongTopics.length },
+              { key: 'moderate', label: '📊 Moderate (60–79%)', count: moderateTopics.length },
+              { key: 'weak',     label: '⚠️ Weak (<60%)',       count: weakTopics.length },
             ].map(({ key, label, count }) => (
               <button
                 key={key}
@@ -315,12 +331,12 @@ export default function StudentDashboard() {
           {tab === 'all' && (
             <>
               {/* Filter + Sort bar */}
-              <div className="px-3 sm:px-5 py-2.5 flex flex-wrap items-center gap-2 border-b border-gray-100" style={{ background: '#f8fafc' }}>
+              <div className="px-3 sm:px-5 py-2.5 flex flex-wrap items-center gap-2 border-b border-gray-100" style={{ background: 'rgba(200,134,10,0.06)' }}>
                 <div className="flex gap-1.5">
                   {['All', 'Science', 'Maths'].map((f) => (
                     <button key={f} onClick={() => setSubjectFilter(f)}
                       className="px-3 py-1 rounded-full text-xs font-medium transition"
-                      style={subjectFilter === f ? { background: GOLD, color: 'white' } : { background: '#f5ede0', color: '#6b4c1e' }}
+                      style={subjectFilter === f ? { background: GOLD, color: 'white' } : { background: 'rgba(200,134,10,0.12)', color: '#9a7040' }}
                     >{f}</button>
                   ))}
                 </div>
@@ -337,8 +353,8 @@ export default function StudentDashboard() {
                     <button key={key} onClick={() => setSortBy(key)}
                       className="px-2.5 py-1 rounded text-xs font-medium transition"
                       style={sortBy === key
-                        ? { background: NAV, color: GOLD }
-                        : { background: '#f0ebe4', color: '#6b4c1e' }}
+                        ? { background: 'rgba(200,134,10,0.22)', color: GOLD, border: '1px solid rgba(200,134,10,0.4)' }
+                        : { background: 'rgba(200,134,10,0.06)', color: '#9a7040', border: '1px solid rgba(200,134,10,0.2)' }}
                     >{label}</button>
                   ))}
                 </div>
@@ -346,11 +362,10 @@ export default function StudentDashboard() {
               </div>
 
               {/* Scrollable table */}
-              <div className="overflow-x-auto">
-                <div className="overflow-y-auto" style={{ maxHeight: '420px' }}>
+              <div className="table-scroll" style={{ overflowX: 'auto' }}>
                   <table className="w-full text-sm">
                     <thead className="sticky top-0 z-10">
-                      <tr className="text-left text-xs text-gray-500 uppercase tracking-wide" style={{ background: '#f8fafc' }}>
+                      <tr className="text-left text-xs text-gray-500 uppercase tracking-wide" style={{ background: 'rgba(200,134,10,0.08)' }}>
                         <th className="px-5 py-3 cursor-pointer hover:text-amber-700 select-none"
                           onClick={() => setSortBy(sortBy === 'date-desc' ? 'date-asc' : 'date-desc')}>
                           Date {sortBy === 'date-desc' ? '↓' : sortBy === 'date-asc' ? '↑' : ''}
@@ -382,7 +397,7 @@ export default function StudentDashboard() {
                               </span>
                             </td>
                             <td className="px-5 py-3 text-gray-700 max-w-xs truncate">{s.topic_name}</td>
-                            <td className="px-5 py-3 text-center font-medium">
+                            <td className="px-5 py-3 text-center font-medium text-gray-800">
                               {s.is_absent ? <span className="text-red-500 text-xs">Absent</span> : s.score_obtained}
                             </td>
                             <td className="px-5 py-3 text-center text-gray-500">{s.total_marks}</td>
@@ -400,7 +415,6 @@ export default function StudentDashboard() {
                     </tbody>
                   </table>
                   {displayedScores.length === 0 && <p className="text-center text-gray-400 py-10 text-sm">No tests found.</p>}
-                </div>
               </div>
             </>
           )}
@@ -410,17 +424,28 @@ export default function StudentDashboard() {
             <div className="p-5">
               <p className="text-xs text-gray-400 mb-3">Topics where your average is 80% or above — keep it up!</p>
               {strongTopics.length === 0
-                ? <p className="text-gray-400 text-sm py-6 text-center">No topics above 75% yet. Keep practicing!</p>
+                ? <p className="text-gray-400 text-sm py-6 text-center">No topics at 80%+ yet. Keep practicing!</p>
                 : <TopicTable topics={strongTopics} type="strong" />
+              }
+            </div>
+          )}
+
+          {/* ── Moderate Topics ── */}
+          {tab === 'moderate' && (
+            <div className="p-5">
+              <p className="text-xs text-gray-400 mb-3">Topics where your average is 60–79% — a little more practice and you'll ace these!</p>
+              {moderateTopics.length === 0
+                ? <p className="text-gray-400 text-sm py-6 text-center">No topics in the moderate range.</p>
+                : <TopicTable topics={moderateTopics} type="moderate" />
               }
             </div>
           )}
 
           {tab === 'weak' && (
             <div className="p-5">
-              <p className="text-xs text-gray-400 mb-3">Topics where your average is below 80% — focus here to improve your rank!</p>
+              <p className="text-xs text-gray-400 mb-3">Topics where your average is below 60% — focus here to improve your rank!</p>
               {weakTopics.length === 0
-                ? <p className="text-gray-400 text-sm py-6 text-center">All topics above 75% — excellent!</p>
+                ? <p className="text-gray-400 text-sm py-6 text-center">No topics below 60% — great work!</p>
                 : <TopicTable topics={weakTopics} type="weak" />
               }
             </div>
@@ -432,26 +457,46 @@ export default function StudentDashboard() {
 }
 
 function DeltaBadge({ delta }) {
-  if (delta === null || delta === undefined) return <span className="text-gray-300 text-xs">—</span>
-  if (delta === 0) return <span className="text-xs text-gray-400">±0</span>
-  const positive = delta > 0
+  if (delta === null || delta === undefined) return (
+    <span style={{ color: 'rgba(200,134,10,0.3)', fontSize: '13px' }}>—</span>
+  )
+  if (delta === 0) return (
+    <span style={{
+      display: 'inline-block', fontSize: '10px', fontWeight: 600,
+      padding: '2px 8px', borderRadius: '999px',
+      background: '#78350f', color: '#fde68a',
+      border: '1px solid #92400e',
+    }}>±0%</span>
+  )
+  const pos = delta > 0
   return (
-    <span className={`inline-flex items-center gap-0.5 text-xs font-semibold px-1.5 py-0.5 rounded ${
-      positive ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'
-    }`}>
-      {positive ? '▲' : '▼'} {positive ? '+' : ''}{delta}%
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: '3px',
+      fontSize: '10px', fontWeight: 700,
+      padding: '2px 9px', borderRadius: '999px',
+      background: pos ? '#166534' : '#991b1b',
+      color: pos ? '#bbf7d0' : '#fecaca',
+      border: `1px solid ${pos ? '#15803d' : '#b91c1c'}`,
+      boxShadow: pos ? '0 0 6px rgba(34,197,94,0.35)' : '0 0 6px rgba(239,68,68,0.35)',
+    }}>
+      <span style={{ fontSize: '7px', lineHeight: 1 }}>{pos ? '▲' : '▼'}</span>
+      {pos ? '+' : ''}{delta}%
     </span>
   )
 }
 
 function TopicTable({ topics, type }) {
-  const isStrong = type === 'strong'
+  const cfg = {
+    strong:   { border: 'rgba(22,163,74,0.25)',  bg: 'rgba(22,163,74,0.1)',  hover: 'hover:bg-green-50',  color: 'text-green-700',  bar: '#16a34a' },
+    moderate: { border: 'rgba(217,119,6,0.25)',  bg: 'rgba(217,119,6,0.08)', hover: 'hover:bg-amber-50',  color: 'text-amber-700',  bar: '#d97706' },
+    weak:     { border: 'rgba(239,68,68,0.25)',  bg: 'rgba(239,68,68,0.1)',  hover: 'hover:bg-red-50',    color: 'text-red-600',    bar: '#ef4444' },
+  }[type]
   return (
-    <div className="overflow-x-auto rounded-lg border" style={{ borderColor: isStrong ? 'rgba(22,163,74,0.25)' : 'rgba(239,68,68,0.25)' }}>
+    <div className="overflow-x-auto rounded-lg border" style={{ borderColor: cfg.border }}>
       <table className="w-full text-sm">
         <thead>
           <tr className="text-left text-xs text-gray-500 uppercase tracking-wide"
-            style={{ background: isStrong ? 'rgba(22,163,74,0.1)' : 'rgba(239,68,68,0.1)' }}>
+            style={{ background: cfg.bg }}>
             <th className="px-4 py-3">Chapter / Topic</th>
             <th className="px-4 py-3">Subject</th>
             <th className="px-4 py-3 text-center">Tests</th>
@@ -463,7 +508,7 @@ function TopicTable({ topics, type }) {
         </thead>
         <tbody className="divide-y divide-gray-50">
           {topics.map((t) => (
-            <tr key={t.topic} className={`transition ${isStrong ? 'hover:bg-green-50' : 'hover:bg-red-50'}`}>
+            <tr key={t.topic} className={`transition ${cfg.hover}`}>
               <td className="px-4 py-3 font-medium text-gray-800">{t.topic}</td>
               <td className="px-4 py-3">
                 <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${t.subject === 'Science' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>
@@ -472,14 +517,14 @@ function TopicTable({ topics, type }) {
               </td>
               <td className="px-4 py-3 text-center text-gray-600">{t.count}</td>
               <td className="px-4 py-3 text-center">
-                <span className={`font-bold ${isStrong ? 'text-green-700' : 'text-red-600'}`}>{t.avg}%</span>
+                <span className={`font-bold ${cfg.color}`}>{t.avg}%</span>
               </td>
               <td className="px-4 py-3 text-center text-green-600 font-medium">{t.best}%</td>
               <td className="px-4 py-3 text-center text-red-500 font-medium">{t.worst}%</td>
               <td className="px-4 py-3 w-32">
                 <div className="w-full bg-gray-100 rounded-full h-2">
                   <div className="h-2 rounded-full transition-all"
-                    style={{ width: `${t.avg}%`, background: isStrong ? '#16a34a' : '#ef4444' }} />
+                    style={{ width: `${t.avg}%`, background: cfg.bar }} />
                 </div>
               </td>
             </tr>

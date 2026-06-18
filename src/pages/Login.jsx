@@ -96,7 +96,7 @@ export default function Login() {
           <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4" style={{ background: GOLD }}>
             <span className="text-3xl font-black text-white">S</span>
           </div>
-          <h1 className="text-2xl font-bold" style={{ color: '#f5ede0' }}>Saraswati Vidya Mandir</h1>
+          <h1 className="text-2xl font-bold" style={{ color: '#f5ede0' }}>Saraswati VidyaMandir</h1>
           <p className="text-sm mt-1" style={{ color: '#9a7040' }}>Student Report Portal</p>
         </div>
 

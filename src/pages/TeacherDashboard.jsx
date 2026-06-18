@@ -57,12 +57,26 @@ export default function TeacherDashboard() {
 
   useEffect(() => {
     async function load() {
-      const [{ data: studs }, { data: scores }] = await Promise.all([
+      const [{ data: studs }] = await Promise.all([
         supabase.from('student_emails').select('*').order('class').order('student_name'),
-        supabase.from('student_scores').select('*'),
       ])
       setStudents(studs || [])
-      setAllScores(scores || [])
+
+      // Supabase caps at 1000 rows by default — page through all score records
+      const PAGE = 1000
+      let allRows = []
+      let from = 0
+      while (true) {
+        const { data, error } = await supabase
+          .from('student_scores')
+          .select('*')
+          .range(from, from + PAGE - 1)
+        if (error || !data || data.length === 0) break
+        allRows = allRows.concat(data)
+        if (data.length < PAGE) break
+        from += PAGE
+      }
+      setAllScores(allRows)
       setLoading(false)
     }
     load()
@@ -319,7 +333,7 @@ export default function TeacherDashboard() {
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <span className="font-semibold text-sm hidden sm:block">Saraswati Vidya Mandir</span>
+              <span className="font-semibold text-sm hidden sm:block">Saraswati VidyaMandir</span>
               <span className="font-bold text-sm sm:hidden">SVM</span>
               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ background: 'rgba(200,134,10,0.2)', color: GOLD, border: `1px solid rgba(200,134,10,0.5)` }}>Teacher</span>
             </div>
@@ -672,7 +686,7 @@ function ini(name) {
                   }}>
                     <span style={{ fontSize: '18px' }}>🏆</span>
                     <span style={{ color: GOLD, fontWeight: 900, fontSize: '13px', letterSpacing: '3px', textTransform: 'uppercase' }}>
-                      Saraswati Vidya Mandir
+                      Saraswati VidyaMandir
                     </span>
                   </div>
                   <div style={{ color: '#7a5030', fontSize: '12px', marginTop: '4px' }}>Top Performers — All Time</div>
@@ -783,7 +797,7 @@ function ini(name) {
 
         {/* Student table */}
         {view === 'students' && <div className="bg-white rounded-xl shadow overflow-hidden">
-          <div className="overflow-x-auto">
+          <div className="overflow-x-hidden">
             <table className="w-full text-sm">
               <thead>
                 {(() => {
@@ -1295,18 +1309,20 @@ function StudentDetailModal({ student, scores, onClose }) {
             {tab === 'all' && (
               <>
                 {/* Filter + Sort bar */}
-                <div className="px-4 py-2.5 flex flex-wrap items-center gap-2 border-b border-gray-100" style={{ background: '#120600' }}>
+                <div className="px-4 py-2.5 flex flex-wrap items-center gap-2 border-b border-gray-100" style={{ background: 'rgba(200,134,10,0.06)' }}>
                   <div className="flex gap-1">
                     {['All', 'Science', 'Maths'].map((f) => (
                       <button key={f} onClick={() => setSubjectFilter(f)}
-                        className="px-2.5 py-1 rounded-full text-xs font-medium transition"
-                        style={subjectFilter === f ? { background: GOLD, color: 'white' } : { background: '#f5ede0', color: '#6b4c1e' }}
+                        className="px-2.5 py-1 rounded-full text-xs font-semibold transition"
+                        style={subjectFilter === f
+                          ? { background: GOLD, color: 'white' }
+                          : { background: 'rgba(200,134,10,0.12)', color: '#9a7040', border: '1px solid rgba(200,134,10,0.25)' }}
                       >{f}</button>
                     ))}
                   </div>
-                  <div className="w-px h-4 bg-gray-200" />
+                  <div className="w-px h-4 bg-gray-300" />
                   <div className="flex items-center gap-1 flex-wrap">
-                    <span className="text-[10px] text-gray-400">Sort:</span>
+                    <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Sort:</span>
                     {[
                       { key: 'date-desc', label: 'Date ↓' },
                       { key: 'date-asc',  label: 'Date ↑' },
@@ -1315,8 +1331,10 @@ function StudentDetailModal({ student, scores, onClose }) {
                       { key: 'subject',   label: 'Subject' },
                     ].map(({ key, label }) => (
                       <button key={key} onClick={() => setSortBy(key)}
-                        className="px-2 py-0.5 rounded text-[10px] font-medium transition"
-                        style={sortBy === key ? { background: NAV, color: GOLD } : { background: '#f0ebe4', color: '#6b4c1e' }}
+                        className="px-2.5 py-1 rounded text-[10px] font-semibold transition"
+                        style={sortBy === key
+                          ? { background: 'rgba(200,134,10,0.22)', color: GOLD, border: '1px solid rgba(200,134,10,0.4)' }
+                          : { background: 'rgba(200,134,10,0.06)', color: '#9a7040', border: '1px solid rgba(200,134,10,0.2)' }}
                       >{label}</button>
                     ))}
                   </div>
@@ -1324,50 +1342,49 @@ function StudentDetailModal({ student, scores, onClose }) {
                 </div>
 
                 {/* Scrollable table */}
-                <div className="overflow-x-auto">
-                  <div className="overflow-y-auto" style={{ maxHeight: '340px' }}>
+                <div className="table-scroll" style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: '360px' }}>
                     <table className="w-full text-sm">
                       <thead className="sticky top-0 z-10">
-                        <tr className="text-xs text-gray-500 uppercase" style={{ background: '#120600' }}>
-                          <th className="px-4 py-2 text-left cursor-pointer hover:text-amber-700 select-none"
+                        <tr className="text-xs text-gray-500 uppercase tracking-wide" style={{ background: 'rgba(200,134,10,0.1)', borderBottom: '2px solid rgba(200,134,10,0.25)' }}>
+                          <th className="px-4 py-2.5 text-left cursor-pointer hover:text-amber-700 select-none font-semibold"
                             onClick={() => setSortBy(sortBy === 'date-desc' ? 'date-asc' : 'date-desc')}>
                             Date {sortBy === 'date-desc' ? '↓' : sortBy === 'date-asc' ? '↑' : ''}
                           </th>
-                          <th className="px-4 py-2 text-left cursor-pointer hover:text-amber-700 select-none"
+                          <th className="px-4 py-2.5 text-left cursor-pointer hover:text-amber-700 select-none font-semibold"
                             onClick={() => setSortBy('subject')}>
                             Subject {sortBy === 'subject' ? '↓' : ''}
                           </th>
-                          <th className="px-4 py-2 text-left">Topic</th>
-                          <th className="px-4 py-2 text-center">Score</th>
-                          <th className="px-4 py-2 text-center">Total</th>
-                          <th className="px-4 py-2 text-center cursor-pointer hover:text-amber-700 select-none"
+                          <th className="px-4 py-2.5 text-left font-semibold">Topic</th>
+                          <th className="px-4 py-2.5 text-center font-semibold">Score</th>
+                          <th className="px-4 py-2.5 text-center font-semibold">Total</th>
+                          <th className="px-4 py-2.5 text-center cursor-pointer hover:text-amber-700 select-none font-semibold"
                             onClick={() => setSortBy(sortBy === 'pct-desc' ? 'pct-asc' : 'pct-desc')}>
                             % {sortBy === 'pct-desc' ? '↓' : sortBy === 'pct-asc' ? '↑' : ''}
                           </th>
-                          <th className="px-4 py-2 text-center hidden sm:table-cell">Δ</th>
+                          <th className="px-4 py-2.5 text-center hidden sm:table-cell font-semibold">Δ</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-gray-50">
+                      <tbody className="divide-y divide-amber-100">
                         {displayed.map((s) => {
                           const pct   = s.is_absent ? null : +((s.score_obtained / s.total_marks) * 100).toFixed(1)
                           const delta = s.is_absent ? null : deltaMap[s.id]
                           return (
-                            <tr key={s.id} className="hover:bg-amber-50">
-                              <td className="px-4 py-2 text-gray-500 text-xs">{s.date}</td>
-                              <td className="px-4 py-2">
+                            <tr key={s.id} className="bg-white hover:bg-amber-50 transition-colors">
+                              <td className="px-4 py-2.5 text-gray-500 text-xs">{s.date}</td>
+                              <td className="px-4 py-2.5">
                                 <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${s.subject === 'Science' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>{s.subject}</span>
                               </td>
-                              <td className="px-4 py-2 text-gray-600 max-w-[180px] truncate text-xs">{s.topic_name}</td>
-                              <td className="px-4 py-2 text-center font-medium text-sm">
-                                {s.is_absent ? <span className="text-red-400 text-xs">Absent</span> : s.score_obtained}
+                              <td className="px-4 py-2.5 text-gray-700 max-w-[180px] truncate text-xs font-medium">{s.topic_name}</td>
+                              <td className="px-4 py-2.5 text-center font-semibold text-gray-800 text-sm">
+                                {s.is_absent ? <span className="text-red-400 text-xs font-medium">Absent</span> : s.score_obtained}
                               </td>
-                              <td className="px-4 py-2 text-center text-gray-400">{s.total_marks}</td>
-                              <td className="px-4 py-2 text-center">
+                              <td className="px-4 py-2.5 text-center text-gray-500 text-sm">{s.total_marks}</td>
+                              <td className="px-4 py-2.5 text-center">
                                 {pct !== null
-                                  ? <span className={`font-bold text-xs ${pct >= 80 ? 'text-green-600' : pct >= 60 ? 'text-amber-600' : 'text-red-500'}`}>{pct}%</span>
-                                  : '—'}
+                                  ? <span className={`font-bold text-sm ${pct >= 80 ? 'text-green-600' : pct >= 60 ? 'text-amber-600' : 'text-red-500'}`}>{pct}%</span>
+                                  : <span className="text-gray-300">—</span>}
                               </td>
-                              <td className="px-4 py-2 text-center hidden sm:table-cell">
+                              <td className="px-4 py-2.5 text-center hidden sm:table-cell">
                                 <DeltaBadge delta={delta} />
                               </td>
                             </tr>
@@ -1375,7 +1392,6 @@ function StudentDetailModal({ student, scores, onClose }) {
                         })}
                       </tbody>
                     </table>
-                  </div>
                 </div>
               </>
             )}
@@ -1449,14 +1465,30 @@ function StudentDetailModal({ student, scores, onClose }) {
 }
 
 function DeltaBadge({ delta }) {
-  if (delta === null || delta === undefined) return <span className="text-gray-300 text-xs">—</span>
-  if (delta === 0) return <span className="text-xs text-gray-400">±0</span>
-  const positive = delta > 0
+  if (delta === null || delta === undefined) return (
+    <span style={{ color: 'rgba(200,134,10,0.3)', fontSize: '13px' }}>—</span>
+  )
+  if (delta === 0) return (
+    <span style={{
+      display: 'inline-block', fontSize: '10px', fontWeight: 600,
+      padding: '2px 8px', borderRadius: '999px',
+      background: 'rgba(200,134,10,0.1)', color: '#9a7040',
+      border: '1px solid rgba(200,134,10,0.22)',
+    }}>±0%</span>
+  )
+  const pos = delta > 0
   return (
-    <span className={`inline-flex items-center gap-0.5 text-xs font-semibold px-1.5 py-0.5 rounded ${
-      positive ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'
-    }`}>
-      {positive ? '▲' : '▼'} {positive ? '+' : ''}{delta}%
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: '3px',
+      fontSize: '10px', fontWeight: 700,
+      padding: '2px 9px', borderRadius: '999px',
+      background: pos ? 'rgba(34,197,94,0.13)' : 'rgba(239,68,68,0.13)',
+      color: pos ? '#4ade80' : '#f87171',
+      border: `1px solid ${pos ? 'rgba(34,197,94,0.32)' : 'rgba(239,68,68,0.32)'}`,
+      boxShadow: pos ? '0 0 6px rgba(34,197,94,0.18)' : '0 0 6px rgba(239,68,68,0.18)',
+    }}>
+      <span style={{ fontSize: '7px', lineHeight: 1 }}>{pos ? '▲' : '▼'}</span>
+      {pos ? '+' : ''}{delta}%
     </span>
   )
 }
@@ -1586,9 +1618,9 @@ function ChapterBarChart({ topics }) {
 }
 
 function MiniStat({ label, value, highlight, positive, negative }) {
-  let style = { background: '#1a0800', border: '1px solid #e5e7eb' }
-  let labelColor = '#9ca3af'
-  let valueColor = '#1e293b'
+  let style = { background: '#f5ede0', border: '1px solid #dfc8a0' }
+  let labelColor = '#7a5530'
+  let valueColor = '#3d1f00'
   if (highlight) { style = { background: '#fffbf2', border: `1px solid ${GOLD}` }; labelColor = '#92400e'; valueColor = GOLD }
   if (positive)  { style = { background: 'rgba(22,163,74,0.08)', border: '1px solid rgba(22,163,74,0.25)' }; labelColor = '#16a34a'; valueColor = '#15803d' }
   if (negative)  { style = { background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)' }; labelColor = '#ef4444'; valueColor = '#dc2626' }
