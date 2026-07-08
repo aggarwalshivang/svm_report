@@ -279,10 +279,20 @@ export default function TeacherDashboard() {
   async function deleteStudent(studentId) {
     if (!window.confirm('Remove this student and all their scores? This cannot be undone.')) return
     setDeletingStudentId(studentId)
-    await Promise.all([
-      supabase.from('student_emails').delete().eq('student_id', studentId),
-      supabase.from('student_scores').delete().eq('student_id', studentId),
-    ])
+    // Delete child rows (student_scores) before the parent (student_emails) — deleting
+    // them concurrently can race a foreign-key constraint and silently fail the parent delete.
+    const { error: scoresErr } = await supabase.from('student_scores').delete().eq('student_id', studentId)
+    if (scoresErr) {
+      alert(`Failed to remove student's scores: ${scoresErr.message}`)
+      setDeletingStudentId(null)
+      return
+    }
+    const { error: emailsErr } = await supabase.from('student_emails').delete().eq('student_id', studentId)
+    if (emailsErr) {
+      alert(`Failed to remove student: ${emailsErr.message}`)
+      setDeletingStudentId(null)
+      return
+    }
     setStudents((prev) => prev.filter((s) => s.student_id !== studentId))
     setAllScores((prev) => prev.filter((s) => s.student_id !== studentId))
     if (expandedStudent === studentId) setExpandedStudent(null)
