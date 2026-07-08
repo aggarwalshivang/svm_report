@@ -410,7 +410,7 @@ export default function TeacherDashboard() {
                   </button>
                 ))}
               </div>
-              {view === 'students' && (
+              {(view === 'students' || view === 'manage') && (
                 <input
                   type="text"
                   placeholder="Search student…"
@@ -912,7 +912,9 @@ function ini(name) {
               <div className="bg-white rounded-xl shadow overflow-hidden">
                 {/* Header */}
                 {(() => {
-                  const filteredRoster = classFilter === 'All' ? studentList : studentList.filter((s) => String(s.class) === classFilter)
+                  const filteredRoster = studentList
+                    .filter((s) => classFilter === 'All' || String(s.class) === classFilter)
+                    .filter((s) => !search || s.student_name.toLowerCase().includes(search.toLowerCase()))
                   return (
                     <>
                 <div className="px-5 py-4 border-b flex items-center justify-between" style={{ background: '#120600' }}>
@@ -1017,7 +1019,7 @@ function ini(name) {
                   })}
                   {filteredRoster.length === 0 && (
                     <p className="text-center text-gray-400 py-10 text-sm">
-                      {classFilter !== 'All' ? `No Class ${classFilter} students.` : 'No students yet.'}
+                      {search ? 'No students match your search.' : classFilter !== 'All' ? `No Class ${classFilter} students.` : 'No students yet.'}
                     </p>
                   )}
                 </div>
