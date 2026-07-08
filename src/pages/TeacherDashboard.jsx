@@ -50,6 +50,7 @@ export default function TeacherDashboard() {
   const [newStudent, setNewStudent] = useState({ name: '', class: '9', emails: [''] })
   const [savingStudent, setSavingStudent] = useState(false)
   const [deletingStudentId, setDeletingStudentId] = useState(null)
+  const [confirmDeleteStudent, setConfirmDeleteStudent] = useState(null)
   const [expandedStudent, setExpandedStudent] = useState(null)
   const [pendingEmail, setPendingEmail] = useState('')
   const [savingEmail, setSavingEmail] = useState(false)
@@ -277,22 +278,38 @@ export default function TeacherDashboard() {
   }
 
   async function deleteStudent(studentId) {
-    if (!window.confirm('Remove this student and all their scores? This cannot be undone.')) return
+    setConfirmDeleteStudent(null)
     setDeletingStudentId(studentId)
     // Delete child rows (student_scores) before the parent (student_emails) — deleting
     // them concurrently can race a foreign-key constraint and silently fail the parent delete.
-    const { error: scoresErr } = await supabase.from('student_scores').delete().eq('student_id', studentId)
+    // .select() is required on every delete: Supabase/RLS returns no error when a policy
+    // silently blocks the delete (0 rows affected) — without .select() that looks identical
+    // to a successful delete, so the row stays in the DB while the UI thinks it's gone.
+    const { error: scoresErr } = await supabase
+      .from('student_scores').delete().eq('student_id', studentId).select('id')
     if (scoresErr) {
       alert(`Failed to remove student's scores: ${scoresErr.message}`)
       setDeletingStudentId(null)
       return
     }
-    const { error: emailsErr } = await supabase.from('student_emails').delete().eq('student_id', studentId)
+
+    const { data: deletedEmails, error: emailsErr } = await supabase
+      .from('student_emails').delete().eq('student_id', studentId).select('id')
     if (emailsErr) {
       alert(`Failed to remove student: ${emailsErr.message}`)
       setDeletingStudentId(null)
       return
     }
+    if (!deletedEmails || deletedEmails.length === 0) {
+      alert(
+        "Delete was blocked by Supabase (likely a Row Level Security policy) — no rows were actually removed.\n\n" +
+        "Ask your Supabase admin to add DELETE policies for the 'authenticated' role on the " +
+        "student_emails and student_scores tables, then try again."
+      )
+      setDeletingStudentId(null)
+      return
+    }
+
     setStudents((prev) => prev.filter((s) => s.student_id !== studentId))
     setAllScores((prev) => prev.filter((s) => s.student_id !== studentId))
     if (expandedStudent === studentId) setExpandedStudent(null)
@@ -315,8 +332,14 @@ export default function TeacherDashboard() {
 
   async function removeEmail(emailRow) {
     setDeletingEmailId(emailRow.id)
-    const { error } = await supabase.from('student_emails').delete().eq('id', emailRow.id)
-    if (!error) setStudents((prev) => prev.filter((s) => s.id !== emailRow.id))
+    const { data, error } = await supabase.from('student_emails').delete().eq('id', emailRow.id).select('id')
+    if (error) {
+      alert(`Failed to remove email: ${error.message}`)
+    } else if (!data || data.length === 0) {
+      alert("Delete was blocked by Supabase (likely a Row Level Security policy) — the email was not removed.")
+    } else {
+      setStudents((prev) => prev.filter((s) => s.id !== emailRow.id))
+    }
     setDeletingEmailId(null)
   }
 
@@ -971,7 +994,7 @@ function ini(name) {
                           <span className="w-16 text-center text-xs text-gray-400 flex-shrink-0">{s.emails.length} email{s.emails.length !== 1 ? 's' : ''}</span>
                           <div className="w-16 flex items-center justify-end gap-2 flex-shrink-0">
                             <button
-                              onClick={(e) => { e.stopPropagation(); deleteStudent(s.student_id) }}
+                              onClick={(e) => { e.stopPropagation(); setConfirmDeleteStudent(s) }}
                               disabled={isDeleting}
                               className="text-xs text-red-500 font-medium px-2 py-1 rounded hover:bg-red-50 transition disabled:opacity-50"
                             >
@@ -1141,6 +1164,61 @@ function ini(name) {
           onClose={() => setSelected(null)}
         />
       )}
+
+      {confirmDeleteStudent && (
+        <ConfirmDeleteStudentModal
+          student={confirmDeleteStudent}
+          onCancel={() => setConfirmDeleteStudent(null)}
+          onConfirm={() => deleteStudent(confirmDeleteStudent.student_id)}
+        />
+      )}
+    </div>
+  )
+}
+
+function ConfirmDeleteStudentModal({ student, onCancel, onConfirm }) {
+  const PHRASE = 'delete this user'
+  const [text, setText] = useState('')
+  const matches = text.trim().toLowerCase() === PHRASE
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onCancel}>
+      <div
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="text-lg font-bold text-gray-800 mb-1">Remove {student.student_name}?</h3>
+        <p className="text-sm text-gray-500 mb-4">
+          This permanently deletes this student's login email(s) and all of their score reports from Supabase. This cannot be undone.
+        </p>
+        <p className="text-xs text-gray-500 mb-2">
+          Type <span className="font-mono font-semibold text-gray-700">{PHRASE}</span> to confirm:
+        </p>
+        <input
+          autoFocus
+          type="text"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && matches) onConfirm() }}
+          placeholder={PHRASE}
+          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-red-200"
+        />
+        <div className="flex gap-2 justify-end">
+          <button
+            onClick={onCancel}
+            className="text-sm font-medium px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100 transition"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={!matches}
+            className="text-sm font-semibold px-4 py-2 rounded-lg text-white bg-red-500 hover:bg-red-600 transition disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Delete Student
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

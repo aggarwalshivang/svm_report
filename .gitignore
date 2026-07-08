@@ -47,8 +47,9 @@ Thumbs.db
 # Python scripts used for data upload
 *.py
 
-# SQL files
+# SQL files (except scripts we intentionally keep in the repo)
 *.sql
+!scripts/*.sql
 
 # Cache
 .cache/
