@@ -269,7 +269,11 @@ export default function TeacherDashboard() {
       email: email.trim().toLowerCase(),
     }))
     const { data, error } = await supabase.from('student_emails').insert(rows).select()
-    if (!error && data) {
+    if (error) {
+      alert(`Failed to add student: ${error.message}`)
+    } else if (!data || data.length === 0) {
+      alert("Add was blocked by Supabase (likely a Row Level Security policy) — the student was not added.")
+    } else {
       setStudents((prev) => [...prev, ...data])
       setNewStudent({ name: '', class: '9', emails: [''] })
       setManageMode('list')
@@ -326,7 +330,14 @@ export default function TeacherDashboard() {
       class: student.class,
       email,
     }]).select()
-    if (!error && data) { setStudents((prev) => [...prev, ...data]); setPendingEmail('') }
+    if (error) {
+      alert(`Failed to add email: ${error.message}`)
+    } else if (!data || data.length === 0) {
+      alert("Add was blocked by Supabase (likely a Row Level Security policy) — the email was not added.")
+    } else {
+      setStudents((prev) => [...prev, ...data])
+      setPendingEmail('')
+    }
     setSavingEmail(false)
   }
 
