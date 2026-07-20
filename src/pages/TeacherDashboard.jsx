@@ -47,7 +47,7 @@ export default function TeacherDashboard() {
 
   // Manage tab state
   const [manageMode, setManageMode] = useState('list') // 'list' | 'add'
-  const [newStudent, setNewStudent] = useState({ name: '', class: '9', emails: [''] })
+  const [newStudent, setNewStudent] = useState({ name: '', class: '9', sourceId: '', emails: [''] })
   const [savingStudent, setSavingStudent] = useState(false)
   const [deletingStudentId, setDeletingStudentId] = useState(null)
   const [confirmDeleteStudent, setConfirmDeleteStudent] = useState(null)
@@ -55,6 +55,12 @@ export default function TeacherDashboard() {
   const [pendingEmail, setPendingEmail] = useState('')
   const [savingEmail, setSavingEmail] = useState(false)
   const [deletingEmailId, setDeletingEmailId] = useState(null)
+  const [editingEmailId, setEditingEmailId] = useState(null)
+  const [editingEmailValue, setEditingEmailValue] = useState('')
+  const [savingEditEmail, setSavingEditEmail] = useState(false)
+  const [editingSourceIdRow, setEditingSourceIdRow] = useState(null)
+  const [editingSourceIdValue, setEditingSourceIdValue] = useState('')
+  const [savingSourceId, setSavingSourceId] = useState(false)
 
   useEffect(() => {
     async function load() {
@@ -213,7 +219,7 @@ export default function TeacherDashboard() {
     const map = {}
     students.forEach((row) => {
       if (!map[row.student_id]) map[row.student_id] = { student_id: row.student_id, student_name: row.student_name, class: row.class, emails: [] }
-      if (row.email) map[row.student_id].emails.push({ id: row.id, email: row.email })
+      if (row.email) map[row.student_id].emails.push({ id: row.id, email: row.email, source_id: row.source_id ?? null })
     })
     return Object.values(map).sort((a, b) => Number(a.class) - Number(b.class) || a.student_name.localeCompare(b.student_name))
   }, [students])
@@ -258,7 +264,9 @@ export default function TeacherDashboard() {
 
   async function addStudent() {
     const validEmails = newStudent.emails.filter((e) => e.trim())
-    if (!newStudent.name.trim() || !validEmails.length) return
+    if (!newStudent.name.trim() || !newStudent.class || !newStudent.sourceId.trim() || !validEmails.length) return
+    const sourceId = Number(newStudent.sourceId.trim())
+    if (!Number.isFinite(sourceId)) { alert('ID must be a number.'); return }
     setSavingStudent(true)
     const maxId = students.length ? Math.max(...students.map((s) => Number(s.student_id))) : 0
     const newId = maxId + 1
@@ -267,6 +275,7 @@ export default function TeacherDashboard() {
       student_name: newStudent.name.trim(),
       class: Number(newStudent.class),
       email: email.trim().toLowerCase(),
+      source_id: sourceId,
     }))
     const { data, error } = await supabase.from('student_emails').insert(rows).select()
     if (error) {
@@ -275,7 +284,7 @@ export default function TeacherDashboard() {
       alert("Add was blocked by Supabase (likely a Row Level Security policy) — the student was not added.")
     } else {
       setStudents((prev) => [...prev, ...data])
-      setNewStudent({ name: '', class: '9', emails: [''] })
+      setNewStudent({ name: '', class: '9', sourceId: '', emails: [''] })
       setManageMode('list')
     }
     setSavingStudent(false)
@@ -339,6 +348,43 @@ export default function TeacherDashboard() {
       setPendingEmail('')
     }
     setSavingEmail(false)
+  }
+
+  async function updateEmail(emailRow) {
+    const email = editingEmailValue.trim().toLowerCase()
+    if (!email || email === emailRow.email) { setEditingEmailId(null); return }
+    setSavingEditEmail(true)
+    const { data, error } = await supabase
+      .from('student_emails').update({ email }).eq('id', emailRow.id).select()
+    if (error) {
+      alert(`Failed to update email: ${error.message}`)
+    } else if (!data || data.length === 0) {
+      alert("Update was blocked by Supabase (likely a Row Level Security policy) — the email was not changed.")
+    } else {
+      setStudents((prev) => prev.map((s) => (s.id === emailRow.id ? { ...s, email } : s)))
+      setEditingEmailId(null)
+      setEditingEmailValue('')
+    }
+    setSavingEditEmail(false)
+  }
+
+  async function updateSourceId(emailRow) {
+    const raw = editingSourceIdValue.trim()
+    const sourceId = raw === '' ? null : Number(raw)
+    if (raw !== '' && !Number.isFinite(sourceId)) { alert('ID must be a number.'); return }
+    setSavingSourceId(true)
+    const { data, error } = await supabase
+      .from('student_emails').update({ source_id: sourceId }).eq('id', emailRow.id).select()
+    if (error) {
+      alert(`Failed to update ID: ${error.message}`)
+    } else if (!data || data.length === 0) {
+      alert("Update was blocked by Supabase (likely a Row Level Security policy) — the ID was not changed.")
+    } else {
+      setStudents((prev) => prev.map((s) => (s.id === emailRow.id ? { ...s, source_id: sourceId } : s)))
+      setEditingSourceIdRow(null)
+      setEditingSourceIdValue('')
+    }
+    setSavingSourceId(false)
   }
 
   async function removeEmail(emailRow) {
@@ -1020,19 +1066,110 @@ function ini(name) {
                             <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-2">Linked Emails</p>
                             <div className="space-y-1.5 mb-3">
                               {s.emails.map((emailRow) => (
-                                <div key={emailRow.id} className="flex items-center justify-between gap-2 bg-white rounded-lg px-3 py-2 border border-gray-100">
-                                  <span className="text-sm text-gray-700">{emailRow.email}</span>
-                                  {s.emails.length > 1 ? (
-                                    <button
-                                      onClick={() => removeEmail(emailRow)}
-                                      disabled={deletingEmailId === emailRow.id}
-                                      className="text-xs text-red-400 hover:text-red-600 font-semibold flex-shrink-0 disabled:opacity-50"
-                                    >
-                                      {deletingEmailId === emailRow.id ? '…' : 'Remove'}
-                                    </button>
-                                  ) : (
-                                    <span className="text-[10px] text-gray-300">primary</span>
-                                  )}
+                                <div key={emailRow.id} className="bg-white rounded-lg px-3 py-2 border border-gray-100 space-y-1.5">
+                                  <div className="flex items-center justify-between gap-2">
+                                    {editingEmailId === emailRow.id ? (
+                                      <>
+                                        <input
+                                          type="email"
+                                          autoFocus
+                                          value={editingEmailValue}
+                                          onChange={(e) => setEditingEmailValue(e.target.value)}
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter') updateEmail(emailRow)
+                                            if (e.key === 'Escape') { setEditingEmailId(null); setEditingEmailValue('') }
+                                          }}
+                                          className="flex-1 border border-gray-200 rounded-lg px-2 py-1 text-sm focus:outline-none bg-white"
+                                          onFocus={(e) => e.target.style.boxShadow = `0 0 0 2px ${GOLD}40`}
+                                          onBlur={(e) => e.target.style.boxShadow = ''}
+                                        />
+                                        <button
+                                          onClick={() => updateEmail(emailRow)}
+                                          disabled={savingEditEmail || !editingEmailValue.trim()}
+                                          className="text-xs font-semibold flex-shrink-0 disabled:opacity-50"
+                                          style={{ color: GOLD }}
+                                        >
+                                          {savingEditEmail ? '…' : 'Save'}
+                                        </button>
+                                        <button
+                                          onClick={() => { setEditingEmailId(null); setEditingEmailValue('') }}
+                                          className="text-xs text-gray-400 hover:text-gray-600 font-semibold flex-shrink-0"
+                                        >
+                                          Cancel
+                                        </button>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <span className="text-sm text-gray-700">{emailRow.email}</span>
+                                        <div className="flex items-center gap-2 flex-shrink-0">
+                                          <button
+                                            onClick={() => { setEditingEmailId(emailRow.id); setEditingEmailValue(emailRow.email) }}
+                                            className="text-xs font-semibold hover:underline"
+                                            style={{ color: GOLD }}
+                                          >
+                                            Edit
+                                          </button>
+                                          {s.emails.length > 1 ? (
+                                            <button
+                                              onClick={() => removeEmail(emailRow)}
+                                              disabled={deletingEmailId === emailRow.id}
+                                              className="text-xs text-red-400 hover:text-red-600 font-semibold disabled:opacity-50"
+                                            >
+                                              {deletingEmailId === emailRow.id ? '…' : 'Remove'}
+                                            </button>
+                                          ) : (
+                                            <span className="text-[10px] text-gray-300">primary</span>
+                                          )}
+                                        </div>
+                                      </>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center justify-between gap-2 pt-1 border-t border-gray-50">
+                                    <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 flex-shrink-0">ID</span>
+                                    {editingSourceIdRow === emailRow.id ? (
+                                      <>
+                                        <input
+                                          type="text"
+                                          inputMode="numeric"
+                                          autoFocus
+                                          value={editingSourceIdValue}
+                                          onChange={(e) => setEditingSourceIdValue(e.target.value)}
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter') updateSourceId(emailRow)
+                                            if (e.key === 'Escape') { setEditingSourceIdRow(null); setEditingSourceIdValue('') }
+                                          }}
+                                          className="flex-1 border border-gray-200 rounded-lg px-2 py-1 text-sm focus:outline-none bg-white"
+                                          onFocus={(e) => e.target.style.boxShadow = `0 0 0 2px ${GOLD}40`}
+                                          onBlur={(e) => e.target.style.boxShadow = ''}
+                                        />
+                                        <button
+                                          onClick={() => updateSourceId(emailRow)}
+                                          disabled={savingSourceId}
+                                          className="text-xs font-semibold flex-shrink-0 disabled:opacity-50"
+                                          style={{ color: GOLD }}
+                                        >
+                                          {savingSourceId ? '…' : 'Save'}
+                                        </button>
+                                        <button
+                                          onClick={() => { setEditingSourceIdRow(null); setEditingSourceIdValue('') }}
+                                          className="text-xs text-gray-400 hover:text-gray-600 font-semibold flex-shrink-0"
+                                        >
+                                          Cancel
+                                        </button>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <span className="text-xs text-gray-500 flex-1">{emailRow.source_id ?? '—'}</span>
+                                        <button
+                                          onClick={() => { setEditingSourceIdRow(emailRow.id); setEditingSourceIdValue(emailRow.source_id != null ? String(emailRow.source_id) : '') }}
+                                          className="text-xs font-semibold hover:underline flex-shrink-0"
+                                          style={{ color: GOLD }}
+                                        >
+                                          Edit
+                                        </button>
+                                      </>
+                                    )}
+                                  </div>
                                 </div>
                               ))}
                             </div>
@@ -1093,7 +1230,7 @@ function ini(name) {
                   </div>
                   {/* Class */}
                   <div>
-                    <label className="block text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-1.5">Class</label>
+                    <label className="block text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-1.5">Class *</label>
                     <div className="flex gap-2">
                       {['9', '10'].map((c) => (
                         <button
@@ -1106,6 +1243,20 @@ function ini(name) {
                         </button>
                       ))}
                     </div>
+                  </div>
+                  {/* ID */}
+                  <div>
+                    <label className="block text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-1.5">ID *</label>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="Roster ID"
+                      value={newStudent.sourceId}
+                      onChange={(e) => setNewStudent((p) => ({ ...p, sourceId: e.target.value }))}
+                      className="w-full border border-gray-200 rounded-lg px-4 py-2.5 text-sm focus:outline-none"
+                      onFocus={(e) => e.target.style.boxShadow = `0 0 0 2px ${GOLD}40`}
+                      onBlur={(e) => e.target.style.boxShadow = ''}
+                    />
                   </div>
                   {/* Emails */}
                   <div>
@@ -1146,14 +1297,14 @@ function ini(name) {
                   <div className="flex gap-3 pt-1">
                     <button
                       onClick={addStudent}
-                      disabled={savingStudent || !newStudent.name.trim() || !newStudent.emails.some((e) => e.trim())}
+                      disabled={savingStudent || !newStudent.name.trim() || !newStudent.class || !newStudent.sourceId.trim() || !newStudent.emails.some((e) => e.trim())}
                       className="px-6 py-2.5 rounded-lg text-sm font-semibold text-white transition disabled:opacity-50"
                       style={{ background: GOLD }}
                     >
                       {savingStudent ? 'Saving…' : 'Add Student'}
                     </button>
                     <button
-                      onClick={() => { setManageMode('list'); setNewStudent({ name: '', class: '9', emails: [''] }) }}
+                      onClick={() => { setManageMode('list'); setNewStudent({ name: '', class: '9', sourceId: '', emails: [''] }) }}
                       className="px-6 py-2.5 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100 transition"
                     >
                       Cancel
