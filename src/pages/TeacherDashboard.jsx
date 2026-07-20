@@ -41,6 +41,10 @@ export default function TeacherDashboard() {
     setTestSort(prev => prev.col === col ? { col, dir: prev.dir === 'desc' ? 'asc' : 'desc' } : { col, dir: 'desc' })
   }
 
+  // Top-scorer report filters (used by the "Top" column + WhatsApp report)
+  const [topPctFilter, setTopPctFilter] = useState('70') // '70' | '80' | 'any'
+  const [topNFilter, setTopNFilter] = useState('any')    // '10' | '20' | '30' | '40' | 'any'
+
   // Chapter analysis sort + filter state
   const [chapterSort, setChapterSort] = useState({ col: 'avg', dir: 'desc' })
   const [chapterSubject, setChapterSubject] = useState('All')
@@ -199,10 +203,16 @@ export default function TeacherDashboard() {
 
   const filteredTests = uniqueTests.filter((t) => classFilter === 'All' || String(t.class) === classFilter)
 
+  const topPctThreshold = topPctFilter === 'any' ? 0 : Number(topPctFilter) / 100
+
   const sortedTests = [...filteredTests]
     .map((t) => {
       const appeared = t.scores.filter((s) => !s.is_absent)
-      return { ...t, appearedCount: appeared.length, topCount70: appeared.filter((s) => s.score_obtained / t.total_marks >= 0.7).length }
+      const qualifiers = appeared
+        .filter((s) => s.score_obtained / t.total_marks >= topPctThreshold)
+        .sort((a, b) => b.score_obtained - a.score_obtained)
+      const capped = topNFilter === 'any' ? qualifiers : qualifiers.slice(0, Number(topNFilter))
+      return { ...t, appearedCount: appeared.length, topCount70: capped.length }
     })
     .sort((a, b) => {
       const { col, dir } = testSort
@@ -227,18 +237,20 @@ export default function TeacherDashboard() {
   function generateMessage(test) {
     const d = new Date(test.date + 'T00:00:00')
     const dateStr = d.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })
-    const topScorers = test.scores
-      .filter((s) => !s.is_absent && s.score_obtained / test.total_marks >= 0.7)
+    let topScorers = test.scores
+      .filter((s) => !s.is_absent && s.score_obtained / test.total_marks >= topPctThreshold)
       .sort((a, b) => b.score_obtained - a.score_obtained || a.student_name.localeCompare(b.student_name))
+    if (topNFilter !== 'any') topScorers = topScorers.slice(0, Number(topNFilter))
     let rank = 1
     const ranked = topScorers.map((s, i) => {
       if (i > 0 && s.score_obtained < topScorers[i - 1].score_obtained) rank = i + 1
       return { ...s, rank }
     })
+    const thresholdLabel = topPctFilter === 'any' ? 'All' : `≥${topPctFilter}%`
     const list = ranked.length
       ? ranked.map((s) => `${s.rank}. ${s.student_name} - ${s.score_obtained}/${test.total_marks}`).join('\n')
-      : '_(No students scored ≥70%)_'
-    return `✅ *Practice Test #${test.testNo} Scores – ${dateStr}*\n\nThe scores have been sent individually to parents via personal *WhatsApp*.\n\n🏆 *Only the Top Scorers are shared in the group.*\n\n📚 *${test.subject} - ${test.topic}*\n📊 *Total Marks:* ${test.total_marks}\n\n*Top Performers (≥70%):*\n\n${list}\n\n📞 *For any queries, please contact 999-266-1556.*\n\n🙏 Thank you for your support!\n\n*Saraswati Vidyamandir*`
+      : `_(No students scored ${thresholdLabel})_`
+    return `✅ *Practice Test #${test.testNo} Scores – ${dateStr}*\n\nThe scores have been sent individually to parents via personal *WhatsApp*.\n\n🏆 *Only the Top Scorers are shared in the group.*\n\n📚 *${test.subject} - ${test.topic}*\n📊 *Total Marks:* ${test.total_marks}\n\n*Top Performers (${thresholdLabel}):*\n\n${list}\n\n📞 *For any queries, please contact 999-266-1556.*\n\n🙏 Thank you for your support!\n\n*Saraswati Vidyamandir*`
   }
 
   async function sendReport(test) {
@@ -510,6 +522,40 @@ export default function TeacherDashboard() {
                   onFocus={(e) => e.target.style.boxShadow = `0 0 0 2px ${GOLD}40`}
                   onBlur={(e) => e.target.style.boxShadow = ''}
                 />
+              )}
+              {view === 'tests' && (
+                <>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-semibold text-gray-400">Threshold</span>
+                    <div className="flex bg-gray-50 rounded-lg border border-gray-200 p-1 gap-1">
+                      {['70', '80', 'any'].map((p) => (
+                        <button
+                          key={p}
+                          onClick={() => setTopPctFilter(p)}
+                          className="px-3 py-1.5 rounded-md text-xs font-medium transition"
+                          style={topPctFilter === p ? { background: GOLD, color: 'white' } : { color: '#6b4c1e' }}
+                        >
+                          {p === 'any' ? 'Any' : `≥${p}%`}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-semibold text-gray-400">Top</span>
+                    <div className="flex bg-gray-50 rounded-lg border border-gray-200 p-1 gap-1">
+                      {['10', '20', '30', '40', 'any'].map((n) => (
+                        <button
+                          key={n}
+                          onClick={() => setTopNFilter(n)}
+                          className="px-3 py-1.5 rounded-md text-xs font-medium transition"
+                          style={topNFilter === n ? { background: GOLD, color: 'white' } : { color: '#6b4c1e' }}
+                        >
+                          {n === 'any' ? 'Any' : n}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </>
               )}
               <span className="text-sm text-gray-400 ml-auto">
                 {view === 'students' ? `${filtered.length} students` : view === 'tests' ? `${filteredTests.length} tests` : view === 'manage' ? `${studentList.length} students` : ''}
@@ -822,7 +868,9 @@ function ini(name) {
                         <TH col="class" className="text-center">Class</TH>
                         <TH col="total_marks" className="text-center">Total</TH>
                         <TH col="appearedCount" className="text-center">Students</TH>
-                        <TH col="topCount70" className="text-center">Top ≥70%</TH>
+                        <TH col="topCount70" className="text-center">
+                          Top {topPctFilter === 'any' ? '' : `≥${topPctFilter}%`}{topNFilter !== 'any' ? ` (≤${topNFilter})` : ''}
+                        </TH>
                         <th className="px-4 py-3 text-center">Send</th>
                       </tr>
                     )
