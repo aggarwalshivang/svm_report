@@ -23,6 +23,7 @@ export default function TeacherDashboard() {
   const [view, setView] = useState('students') // 'students' | 'tests'
   const [sending, setSending] = useState(null)
   const [sendResult, setSendResult] = useState(null)
+  const [previewTest, setPreviewTest] = useState(null)
   const [sentReports, setSentReports] = useState(() => {
     try { return JSON.parse(localStorage.getItem('svm_sent_reports') || '{}') } catch { return {} }
   })
@@ -901,17 +902,17 @@ function ini(name) {
                           ) : result && !result.success ? (
                             <div className="flex flex-col items-center gap-1">
                               <span className="text-xs text-red-500 font-medium">✗ Failed</span>
-                              <button onClick={() => sendReport(t)} className="text-xs font-medium" style={{ color: GOLD }}>Retry</button>
+                              <button onClick={() => setPreviewTest(t)} className="text-xs font-medium" style={{ color: GOLD }}>Retry</button>
                             </div>
                           ) : sentReports[t.key] ? (
                             <div className="flex flex-col items-center gap-1">
                               <span className="text-xs text-green-600 font-semibold">✓ Sent</span>
                               <span className="text-[10px] text-gray-400">{new Date(sentReports[t.key]).toLocaleDateString('en-US', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
-                              <button onClick={() => sendReport(t)} className="text-[10px] font-medium px-2 py-0.5 rounded border" style={{ color: GOLD, borderColor: GOLD }}>↺ Re-send</button>
+                              <button onClick={() => setPreviewTest(t)} className="text-[10px] font-medium px-2 py-0.5 rounded border" style={{ color: GOLD, borderColor: GOLD }}>↺ Re-send</button>
                             </div>
                           ) : (
                             <button
-                              onClick={() => sendReport(t)}
+                              onClick={() => setPreviewTest(t)}
                               className="text-xs font-semibold px-3 py-1.5 rounded-lg text-white transition"
                               style={{ background: GOLD }}
                             >
@@ -1380,6 +1381,55 @@ function ini(name) {
           onConfirm={() => deleteStudent(confirmDeleteStudent.student_id)}
         />
       )}
+
+      {previewTest && (
+        <SendReportPreviewModal
+          test={previewTest}
+          message={generateMessage(previewTest)}
+          sending={sending === previewTest.key}
+          onCancel={() => setPreviewTest(null)}
+          onConfirm={async () => {
+            await sendReport(previewTest)
+            setPreviewTest(null)
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+function SendReportPreviewModal({ test, message, sending, onCancel, onConfirm }) {
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={sending ? undefined : onCancel}>
+      <div
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="text-lg font-bold text-gray-800 mb-1">Preview message — Test #{test.testNo}</h3>
+        <p className="text-sm text-gray-500 mb-4">
+          This is exactly what will be posted to the Class {test.class} group. Review before sending.
+        </p>
+        <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 max-h-80 overflow-y-auto whitespace-pre-wrap text-sm text-gray-800 font-mono mb-4">
+          {message}
+        </div>
+        <div className="flex gap-2 justify-end">
+          <button
+            onClick={onCancel}
+            disabled={sending}
+            className="text-sm font-medium px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100 transition disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={sending}
+            className="text-sm font-semibold px-4 py-2 rounded-lg text-white transition disabled:opacity-40 disabled:cursor-not-allowed"
+            style={{ background: GOLD }}
+          >
+            {sending ? 'Sending…' : '📤 Confirm & Send'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
