@@ -21,22 +21,23 @@ export default function Login() {
     setError('')
     setLoading(true)
 
+    const { data: authData, error: authErr } = await supabase.auth.signInWithPassword({
+      email: email.trim().toLowerCase(),
+      password,
+    })
+    if (authErr) {
+      setError('Invalid email or password.')
+      setLoading(false)
+      return
+    }
+
     if (role === 'teacher') {
-      const { data, error: authErr } = await supabase.auth.signInWithPassword({
-        email: email.trim().toLowerCase(),
-        password,
-      })
-      if (authErr) {
-        setError('Invalid email or password.')
-        setLoading(false)
-        return
-      }
-      localStorage.setItem('svm_session', JSON.stringify({ role: 'teacher', email: data.user.email }))
+      localStorage.setItem('svm_session', JSON.stringify({ role: 'teacher', email: authData.user.email }))
       navigate('/teacher')
       return
     }
 
-    // Student login — look up by email
+    // Student login — fetch profile by email
     const { data, error: dbErr } = await supabase
       .from('student_emails')
       .select('student_id, student_name, class')
@@ -51,7 +52,7 @@ export default function Login() {
       return
     }
     if (!data) {
-      setError('Email not found. Please check and try again.')
+      setError('No student profile found for this email.')
       setLoading(false)
       return
     }
@@ -139,15 +140,15 @@ export default function Login() {
             </div>
           ) : (
             <form onSubmit={handleForgotPassword} className="space-y-4">
-              <p className="text-sm" style={{ color: '#9a7040' }}>Enter your teacher email and we'll send a password reset link.</p>
+              <p className="text-sm" style={{ color: '#9a7040' }}>Enter your {role === 'teacher' ? 'teacher' : 'student'} email and we'll send a password reset link.</p>
               <div>
-                <label className="block text-sm font-medium mb-1" style={{ color: '#d4b483' }}>Teacher Email</label>
+                <label className="block text-sm font-medium mb-1" style={{ color: '#d4b483' }}>Email</label>
                 <input
                   type="email"
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="admin@saraswatividyamandir.com"
+                  placeholder={role === 'student' ? 'your@gmail.com' : 'admin@saraswatividyamandir.com'}
                   className="w-full px-4 py-3 rounded-lg focus:outline-none"
                   style={inputStyle}
                   onFocus={(e) => e.target.style.boxShadow = '0 0 0 2px #c8860a40'}
@@ -196,38 +197,30 @@ export default function Login() {
               />
             </div>
 
-            {role === 'teacher' && (
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="block text-sm font-medium" style={{ color: '#d4b483' }}>Password</label>
-                  <button
-                    type="button"
-                    onClick={() => { setForgotMode(true); setError('') }}
-                    className="text-xs font-medium"
-                    style={{ color: GOLD }}
-                  >
-                    Forgot password?
-                  </button>
-                </div>
-                <input
-                  type="password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Enter password"
-                  className="w-full px-4 py-3 rounded-lg focus:outline-none"
-                  style={inputStyle}
-                  onFocus={(e) => e.target.style.boxShadow = '0 0 0 2px #c8860a40'}
-                  onBlur={(e) => e.target.style.boxShadow = ''}
-                />
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-sm font-medium" style={{ color: '#d4b483' }}>Password</label>
+                <button
+                  type="button"
+                  onClick={() => { setForgotMode(true); setError('') }}
+                  className="text-xs font-medium"
+                  style={{ color: GOLD }}
+                >
+                  Forgot password?
+                </button>
               </div>
-            )}
-
-            {role === 'student' && (
-              <p className="text-xs" style={{ color: '#9a7040' }}>
-                Enter the email address linked to your account. No password required.
-              </p>
-            )}
+              <input
+                type="password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Enter password"
+                className="w-full px-4 py-3 rounded-lg focus:outline-none"
+                style={inputStyle}
+                onFocus={(e) => e.target.style.boxShadow = '0 0 0 2px #c8860a40'}
+                onBlur={(e) => e.target.style.boxShadow = ''}
+              />
+            </div>
 
             {error && (
               <div className="rounded-lg px-4 py-3 text-sm" style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.25)', color: '#f87171' }}>
