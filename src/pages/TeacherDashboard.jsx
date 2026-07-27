@@ -9,6 +9,24 @@ import { supabase } from '../lib/supabase'
 const GOLD = '#c8860a'
 const NAV  = '#2d1200'
 const DARK = '#1a0800'
+const STUDENT_DEFAULT_PASSWORD = 'Svm@2026'
+
+// Creates the student's login (default password) via a Supabase Edge Function —
+// it needs the service-role key, which must never live in browser code.
+async function provisionStudentAccount(email, studentId, studentName) {
+  const { data, error } = await supabase.functions.invoke('create-student-account', {
+    body: { email, student_id: studentId, student_name: studentName },
+  })
+  if (error) return { email, ok: false, message: error.message }
+  if (data?.ok === false) return { email, ok: false, message: data.error }
+  return { email, ok: true }
+}
+
+// Excludes tests dated before a student's report_start_date (set when they're
+// added mid-year) so pre-enrollment tests never count toward their stats.
+function countsForStudent(row, student) {
+  return !student?.report_start_date || row.date >= student.report_start_date
+}
 
 export default function TeacherDashboard() {
   const navigate = useNavigate()
@@ -68,6 +86,7 @@ export default function TeacherDashboard() {
   const [editingSourceIdRow, setEditingSourceIdRow] = useState(null)
   const [editingSourceIdValue, setEditingSourceIdValue] = useState('')
   const [savingSourceId, setSavingSourceId] = useState(false)
+  const [creatingLoginId, setCreatingLoginId] = useState(null)
 
   useEffect(() => {
     async function load() {
@@ -106,7 +125,7 @@ export default function TeacherDashboard() {
     const seenIds = new Set()
     const uniqueStudents = students.filter((s) => { if (seenIds.has(s.student_id)) return false; seenIds.add(s.student_id); return true })
     const summaries = uniqueStudents.map((s) => {
-      const rows = allScores.filter((r) => r.student_id === s.student_id)
+      const rows = allScores.filter((r) => r.student_id === s.student_id && countsForStudent(r, s))
       const appeared = rows.filter((r) => !r.is_absent)
       const absentCount = rows.filter((r) => r.is_absent).length
       const avgPct = appeared.length > 0
@@ -167,10 +186,11 @@ export default function TeacherDashboard() {
     : 'N/A'
 
   const chapterStats = useMemo(() => {
-    const scopeIds = new Set(scope.map((s) => s.student_id))
+    const scopeById = new Map(scope.map((s) => [s.student_id, s]))
     const map = {}
     allScores.forEach((r) => {
-      if (!scopeIds.has(r.student_id) || r.is_absent) return
+      const student = scopeById.get(r.student_id)
+      if (!student || r.is_absent || !countsForStudent(r, student)) return
       const key = `${r.subject}||${r.topic_name}`
       if (!map[key]) map[key] = { subject: r.subject, topic: r.topic_name, total: 0, count: 0, tests: new Set(), best: 0, worst: 100 }
       const pct = (r.score_obtained / r.total_marks) * 100
@@ -194,7 +214,7 @@ export default function TeacherDashboard() {
     const map = {}
     allScores.forEach((score) => {
       const student = studentMap[score.student_id]
-      if (!student) return
+      if (!student || !countsForStudent(score, student)) return
       const key = `${score.date}|${score.subject}|${score.topic_name}|${score.total_marks}|${student.class}`
       if (!map[key]) map[key] = { key, date: score.date, subject: score.subject, topic: score.topic_name, total_marks: score.total_marks, class: student.class, scores: [] }
       map[key].scores.push({ ...score, student_name: student.student_name })
@@ -232,7 +252,7 @@ export default function TeacherDashboard() {
     const map = {}
     students.forEach((row) => {
       if (!map[row.student_id]) map[row.student_id] = { student_id: row.student_id, student_name: row.student_name, class: row.class, emails: [] }
-      if (row.email) map[row.student_id].emails.push({ id: row.id, email: row.email, source_id: row.source_id ?? null })
+      if (row.email) map[row.student_id].emails.push({ id: row.id, email: row.email, source_id: row.source_id ?? null, login_created: !!row.login_created })
     })
     return Object.values(map).sort((a, b) => Number(a.class) - Number(b.class) || a.student_name.localeCompare(b.student_name))
   }, [students])
@@ -328,12 +348,14 @@ export default function TeacherDashboard() {
     setSavingStudent(true)
     const maxId = students.length ? Math.max(...students.map((s) => Number(s.student_id))) : 0
     const newId = maxId + 1
+    const reportStartDate = new Date().toISOString().slice(0, 10)
     const rows = validEmails.map((email) => ({
       student_id: newId,
       student_name: newStudent.name.trim(),
       class: Number(newStudent.class),
       email: email.trim().toLowerCase(),
       source_id: sourceId,
+      report_start_date: reportStartDate,
     }))
     const { data, error } = await supabase.from('student_emails').insert(rows).select()
     if (error) {
@@ -406,6 +428,27 @@ export default function TeacherDashboard() {
       setPendingEmail('')
     }
     setSavingEmail(false)
+  }
+
+  async function createStudentLogin(student) {
+    const pendingEmails = student.emails.filter((e) => !e.login_created)
+    if (!pendingEmails.length) return
+    setCreatingLoginId(student.student_id)
+    const results = await Promise.all(
+      pendingEmails.map((e) => provisionStudentAccount(e.email, student.student_id, student.student_name))
+    )
+    const succeededIds = pendingEmails.filter((_, i) => results[i].ok).map((e) => e.id)
+    if (succeededIds.length) {
+      await supabase.from('student_emails').update({ login_created: true }).in('id', succeededIds)
+      setStudents((prev) => prev.map((r) => (succeededIds.includes(r.id) ? { ...r, login_created: true } : r)))
+    }
+    const failed = results.filter((r) => !r.ok)
+    if (failed.length) {
+      alert(`Could not create login for: ${failed.map((f) => f.email).join(', ')}\n\n${failed[0].message}`)
+    } else {
+      alert(`Dashboard created.\nLogin: ${pendingEmails.map((e) => e.email).join(', ')}\nDefault password: ${STUDENT_DEFAULT_PASSWORD}`)
+    }
+    setCreatingLoginId(null)
   }
 
   async function updateEmail(emailRow) {
@@ -1150,7 +1193,17 @@ function ini(name) {
                           </span>
                           <span className="flex-1 font-medium text-gray-800 truncate">{s.student_name}</span>
                           <span className="w-16 text-center text-xs text-gray-400 flex-shrink-0">{s.emails.length} email{s.emails.length !== 1 ? 's' : ''}</span>
-                          <div className="w-16 flex items-center justify-end gap-2 flex-shrink-0">
+                          <div className="flex items-center justify-end gap-2 flex-shrink-0">
+                            {s.emails.some((e) => !e.login_created) && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); createStudentLogin(s) }}
+                                disabled={creatingLoginId === s.student_id}
+                                className="text-xs font-semibold px-2.5 py-1 rounded text-white transition disabled:opacity-50"
+                                style={{ background: GOLD }}
+                              >
+                                {creatingLoginId === s.student_id ? 'Creating…' : 'Create Dashboard'}
+                              </button>
+                            )}
                             <button
                               onClick={(e) => { e.stopPropagation(); setConfirmDeleteStudent(s) }}
                               disabled={isDeleting}
@@ -1201,7 +1254,12 @@ function ini(name) {
                                       </>
                                     ) : (
                                       <>
-                                        <span className="text-sm text-gray-700">{emailRow.email}</span>
+                                        <span className="text-sm text-gray-700 flex items-center gap-1.5">
+                                          {emailRow.email}
+                                          {emailRow.login_created
+                                            ? <span className="text-[10px] font-semibold text-green-600">✓ dashboard</span>
+                                            : <span className="text-[10px] font-semibold text-gray-400">no dashboard</span>}
+                                        </span>
                                         <div className="flex items-center gap-2 flex-shrink-0">
                                           <button
                                             onClick={() => { setEditingEmailId(emailRow.id); setEditingEmailValue(emailRow.email) }}

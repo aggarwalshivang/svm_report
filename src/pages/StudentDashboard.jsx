@@ -24,12 +24,26 @@ export default function StudentDashboard() {
 
   useEffect(() => {
     if (!session?.studentId) return
-    supabase
-      .from('student_scores')
-      .select('*')
-      .eq('student_id', session.studentId)
-      .order('date', { ascending: true })
-      .then(({ data }) => { setScores(data || []); setLoading(false) })
+    async function load() {
+      const { data: profile } = await supabase
+        .from('student_emails')
+        .select('report_start_date')
+        .eq('student_id', session.studentId)
+        .limit(1)
+        .maybeSingle()
+      const cutoff = profile?.report_start_date ?? null
+
+      const { data } = await supabase
+        .from('student_scores')
+        .select('*')
+        .eq('student_id', session.studentId)
+        .order('date', { ascending: true })
+
+      const rows = cutoff ? (data || []).filter((s) => s.date >= cutoff) : (data || [])
+      setScores(rows)
+      setLoading(false)
+    }
+    load()
   }, [session?.studentId])
 
   useEffect(() => {
@@ -38,12 +52,16 @@ export default function StudentDashboard() {
       // Fetch classmates (deduplicate by student_id)
       const { data: classmates } = await supabase
         .from('student_emails')
-        .select('student_id')
+        .select('student_id, report_start_date')
         .eq('class', session.class)
 
       if (!classmates?.length) return
       const uniqueIds = [...new Set(classmates.map((s) => String(s.student_id)).filter(Boolean))]
       setClassSize(uniqueIds.length)
+
+      // Each classmate's own report cutoff (set for students added mid-year), keyed by student_id.
+      const cutoffById = {}
+      classmates.forEach((s) => { cutoffById[String(s.student_id)] = s.report_start_date })
 
       // Page through all scores (avoid 1000-row default cap)
       const PAGE = 1000
@@ -52,7 +70,7 @@ export default function StudentDashboard() {
       while (true) {
         const { data, error } = await supabase
           .from('student_scores')
-          .select('student_id, score_obtained, total_marks, is_absent')
+          .select('student_id, date, score_obtained, total_marks, is_absent')
           .range(from, from + PAGE - 1)
         if (error || !data || data.length === 0) break
         allScores = allScores.concat(data)
@@ -64,7 +82,8 @@ export default function StudentDashboard() {
       const avgMap = Object.fromEntries(uniqueIds.map((id) => [id, { total: 0, count: 0 }]))
       allScores.forEach((r) => {
         const key = String(r.student_id)
-        if (!avgMap[key] || r.is_absent) return
+        const cutoff = cutoffById[key]
+        if (!avgMap[key] || r.is_absent || (cutoff && r.date < cutoff)) return
         avgMap[key].total += (r.score_obtained / r.total_marks) * 100
         avgMap[key].count += 1
       })
