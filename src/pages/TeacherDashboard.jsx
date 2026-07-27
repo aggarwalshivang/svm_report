@@ -940,7 +940,7 @@ function ini(name) {
                     )
                     const TH = ({ col, className = '', children }) => (
                       <th
-                        className={`px-4 py-3 cursor-pointer select-none hover:text-amber-400 transition-colors ${className}`}
+                        className={`px-4 py-3 cursor-pointer select-none hover:text-amber-400 transition-colors whitespace-nowrap ${className}`}
                         onClick={() => toggleTestSort(col)}
                       >
                         {children}<SI col={col} />
@@ -958,8 +958,8 @@ function ini(name) {
                         <TH col="topCount70" className="text-center">
                           Top {topPctFilter === '0' ? '' : `≥${topPctFilter}%`}{topNFilter !== 'any' ? ` (≤${topNFilter})` : ''}
                         </TH>
-                        <th className="px-4 py-3 text-center">Edit</th>
-                        <th className="px-4 py-3 text-center">Send</th>
+                        <th className="px-4 py-3 text-center whitespace-nowrap">Edit</th>
+                        <th className="px-4 py-3 text-center whitespace-nowrap">Send</th>
                       </tr>
                     )
                   })()}
@@ -972,7 +972,7 @@ function ini(name) {
                     return (
                       <tr key={t.key} className="hover:bg-amber-50">
                         <td className="px-4 py-3 text-center font-bold text-gray-400 text-xs">#{t.testNo}</td>
-                        <td className="px-4 py-3 text-gray-600 text-xs">{t.date}</td>
+                        <td className="px-4 py-3 text-gray-600 text-xs whitespace-nowrap">{t.date}</td>
                         <td className="px-4 py-3">
                           <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${t.subject === 'Science' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>{t.subject}</span>
                         </td>
@@ -988,7 +988,8 @@ function ini(name) {
                         <td className="px-4 py-3 text-center">
                           <button
                             onClick={() => setEditingTest(t)}
-                            className="text-xs font-medium px-2 py-1 rounded border text-gray-500 hover:text-gray-700 hover:border-gray-400 transition"
+                            className="text-xs font-semibold px-3 py-1.5 rounded-lg border transition"
+                            style={{ color: GOLD, borderColor: GOLD }}
                           >
                             ✏️ Edit
                           </button>

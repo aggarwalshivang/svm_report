@@ -54,3 +54,6 @@ Thumbs.db
 # Cache
 .cache/
 .parcel-cache/
+
+# Supabase CLI local cache
+supabase/.temp/
