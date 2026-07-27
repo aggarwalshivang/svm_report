@@ -24,6 +24,8 @@ export default function TeacherDashboard() {
   const [sending, setSending] = useState(null)
   const [sendResult, setSendResult] = useState(null)
   const [previewTest, setPreviewTest] = useState(null)
+  const [editingTest, setEditingTest] = useState(null)
+  const [savingTestEdit, setSavingTestEdit] = useState(false)
   const [sentReports, setSentReports] = useState(() => {
     try { return JSON.parse(localStorage.getItem('svm_sent_reports') || '{}') } catch { return {} }
   })
@@ -273,6 +275,49 @@ export default function TeacherDashboard() {
       setSendResult({ key: test.key, success: false })
     }
     setSending(null)
+  }
+
+  async function saveTestEdit(test, newTotalMarks, minPercent) {
+    setSavingTestEdit(true)
+    const ids = test.scores.map((s) => s.id)
+
+    const { error: totalErr } = await supabase
+      .from('student_scores')
+      .update({ total_marks: newTotalMarks })
+      .in('id', ids)
+    if (totalErr) {
+      alert(`Failed to update total marks: ${totalErr.message}`)
+      setSavingTestEdit(false)
+      return
+    }
+
+    // Floor: anyone below this % of the (possibly new) total marks gets bumped up to it.
+    const floor = minPercent > 0 ? Math.round((minPercent / 100) * newTotalMarks) : 0
+    const boostIds = test.scores
+      .filter((s) => !s.is_absent && s.score_obtained < floor)
+      .map((s) => s.id)
+
+    if (boostIds.length) {
+      const { error: boostErr } = await supabase
+        .from('student_scores')
+        .update({ score_obtained: floor })
+        .in('id', boostIds)
+      if (boostErr) {
+        alert(`Total marks updated, but failed to apply the minimum score floor: ${boostErr.message}`)
+        setSavingTestEdit(false)
+        return
+      }
+    }
+
+    const idSet = new Set(ids)
+    const boostSet = new Set(boostIds)
+    setAllScores((prev) => prev.map((r) => (
+      idSet.has(r.id)
+        ? { ...r, total_marks: newTotalMarks, score_obtained: boostSet.has(r.id) ? floor : r.score_obtained }
+        : r
+    )))
+    setSavingTestEdit(false)
+    setEditingTest(null)
   }
 
   async function addStudent() {
@@ -870,6 +915,7 @@ function ini(name) {
                         <TH col="topCount70" className="text-center">
                           Top {topPctFilter === '0' ? '' : `≥${topPctFilter}%`}{topNFilter !== 'any' ? ` (≤${topNFilter})` : ''}
                         </TH>
+                        <th className="px-4 py-3 text-center">Edit</th>
                         <th className="px-4 py-3 text-center">Send</th>
                       </tr>
                     )
@@ -895,6 +941,14 @@ function ini(name) {
                         <td className="px-4 py-3 text-center text-gray-600 text-xs">{appearedCount}/{t.scores.length}</td>
                         <td className="px-4 py-3 text-center">
                           <span className={`font-semibold text-xs ${topCount > 0 ? 'text-green-600' : 'text-gray-400'}`}>{topCount}</span>
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          <button
+                            onClick={() => setEditingTest(t)}
+                            className="text-xs font-medium px-2 py-1 rounded border text-gray-500 hover:text-gray-700 hover:border-gray-400 transition"
+                          >
+                            ✏️ Edit
+                          </button>
                         </td>
                         <td className="px-4 py-3 text-center">
                           {isSending ? (
@@ -1394,6 +1448,15 @@ function ini(name) {
           }}
         />
       )}
+
+      {editingTest && (
+        <EditTestModal
+          test={editingTest}
+          saving={savingTestEdit}
+          onCancel={() => setEditingTest(null)}
+          onSave={(newTotalMarks, minPercent) => saveTestEdit(editingTest, newTotalMarks, minPercent)}
+        />
+      )}
     </div>
   )
 }
@@ -1427,6 +1490,77 @@ function SendReportPreviewModal({ test, message, sending, onCancel, onConfirm })
             style={{ background: GOLD }}
           >
             {sending ? 'Sending…' : '📤 Confirm & Send'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function EditTestModal({ test, saving, onCancel, onSave }) {
+  const [totalMarks, setTotalMarks] = useState(String(test.total_marks))
+  const [minPercent, setMinPercent] = useState('0')
+
+  const totalNum = Number(totalMarks)
+  const minNum = Number(minPercent)
+  const validTotal = Number.isFinite(totalNum) && totalNum > 0
+  const validMin = Number.isFinite(minNum) && minNum >= 0 && minNum <= 100
+  const floor = validTotal && validMin ? Math.round((minNum / 100) * totalNum) : null
+  const affected = floor !== null
+    ? test.scores.filter((s) => !s.is_absent && s.score_obtained < floor).length
+    : 0
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={saving ? undefined : onCancel}>
+      <div
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="text-lg font-bold text-gray-800 mb-1">Edit Test #{test.testNo}</h3>
+        <p className="text-sm text-gray-500 mb-4">{test.subject} · {test.topic} · Class {test.class}</p>
+
+        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Total Marks</label>
+        <input
+          autoFocus
+          type="number"
+          min="1"
+          value={totalMarks}
+          onChange={(e) => setTotalMarks(e.target.value)}
+          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-amber-200"
+        />
+
+        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Minimum Score (%)</label>
+        <input
+          type="number"
+          min="0"
+          max="100"
+          value={minPercent}
+          onChange={(e) => setMinPercent(e.target.value)}
+          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-1 focus:outline-none focus:ring-2 focus:ring-amber-200"
+        />
+        <p className="text-xs text-gray-400 mb-4">
+          {floor !== null
+            ? floor > 0
+              ? `Anyone scoring below ${floor}/${totalNum} will be raised to ${floor}${affected ? ` — affects ${affected} student${affected === 1 ? '' : 's'}.` : '.'}`
+              : 'No floor will be applied — scores are left as-is.'
+            : 'Enter valid values above.'}
+        </p>
+
+        <div className="flex gap-2 justify-end">
+          <button
+            onClick={onCancel}
+            disabled={saving}
+            className="text-sm font-medium px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100 transition disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => onSave(totalNum, minNum)}
+            disabled={saving || !validTotal || !validMin}
+            className="text-sm font-semibold px-4 py-2 rounded-lg text-white transition disabled:opacity-40 disabled:cursor-not-allowed"
+            style={{ background: GOLD }}
+          >
+            {saving ? 'Saving…' : 'Save Changes'}
           </button>
         </div>
       </div>
