@@ -100,18 +100,22 @@ export default function TeacherDashboard() {
 
   // Assignments tab state
   const [assignments, setAssignments] = useState([])
+  const [assignmentSubmissions, setAssignmentSubmissions] = useState([])
   const [deletingAssignmentId, setDeletingAssignmentId] = useState(null)
   const [confirmDeleteAssignment, setConfirmDeleteAssignment] = useState(null)
   const [assignmentClass, setAssignmentClass] = useState('9')
+  const [expandedAnalysisId, setExpandedAnalysisId] = useState(null)
 
   useEffect(() => {
     async function load() {
-      const [{ data: studs }, { data: asgn }] = await Promise.all([
+      const [{ data: studs }, { data: asgn }, { data: subs }] = await Promise.all([
         supabase.from('student_emails').select('*').order('class').order('student_name'),
         supabase.from('assignments').select('*').order('deadline'),
+        supabase.from('assignment_submissions').select('*'),
       ])
       setStudents(studs || [])
       setAssignments(asgn || [])
+      setAssignmentSubmissions(subs || [])
 
       // Supabase caps at 1000 rows by default — page through all score records
       const PAGE = 1000
@@ -247,6 +251,36 @@ export default function TeacherDashboard() {
   const filteredAssignments = assignments
     .filter((a) => String(a.class) === assignmentClass)
     .filter((a) => !search || a.title.toLowerCase().includes(search.toLowerCase()) || a.subject.toLowerCase().includes(search.toLowerCase()))
+
+  // Submission-rate analysis shown at the top of the Assignments tab — covers
+  // every assignment/class, independent of the class toggle used by the table below.
+  const assignmentAnalysis = useMemo(() => {
+    const rosterFor = (cls) => studentSummary.filter((s) => String(s.class) === cls)
+
+    const perAssignment = assignments
+      .map((a) => {
+        const roster = rosterFor(String(a.class))
+        const submittedIds = new Set(
+          assignmentSubmissions.filter((s) => s.assignment_id === a.id).map((s) => s.student_id)
+        )
+        const missing = roster.filter((s) => !submittedIds.has(s.student_id))
+        const total = roster.length
+        const submittedCount = total - missing.length
+        const rate = total > 0 ? Math.round((submittedCount / total) * 100) : 0
+        return { assignment: a, submittedCount, total, rate, missing }
+      })
+      .sort((a, b) => new Date(b.assignment.deadline) - new Date(a.assignment.deadline))
+
+    const perClass = ['9', '10'].map((cls) => {
+      const clsRows = perAssignment.filter((p) => String(p.assignment.class) === cls)
+      const avgRate = clsRows.length
+        ? Math.round(clsRows.reduce((sum, p) => sum + p.rate, 0) / clsRows.length)
+        : 0
+      return { class: cls, avgRate, assignmentCount: clsRows.length, rosterSize: rosterFor(cls).length }
+    })
+
+    return { perAssignment, perClass }
+  }, [assignments, assignmentSubmissions, studentSummary])
 
   const topPctThreshold = Number(topPctFilter) / 100
 
@@ -1225,6 +1259,71 @@ function ini(name) {
             >
               📤 Upload Assignment / Worksheet ↗
             </a>
+
+            {/* ── Assignment Analysis ── */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+              <p className="text-sm font-semibold text-gray-700 mb-3">📊 Assignment Analysis</p>
+
+              <div className="grid grid-cols-2 gap-3 mb-4">
+                {assignmentAnalysis.perClass.map((c) => (
+                  <div key={c.class} className="rounded-lg border border-gray-100 p-3">
+                    <p className="text-xs text-gray-400 uppercase tracking-wide font-semibold mb-1">Class {c.class}</p>
+                    <p className="text-2xl font-bold text-gray-800">{c.avgRate}%</p>
+                    <p className="text-xs text-gray-500 mt-0.5">{c.assignmentCount} assignment{c.assignmentCount === 1 ? '' : 's'} · {c.rosterSize} students</p>
+                    <div className="w-full bg-gray-100 rounded-full h-1.5 mt-2">
+                      <div className="h-1.5 rounded-full transition-all" style={{
+                        width: `${c.avgRate}%`,
+                        background: c.avgRate >= 80 ? '#16a34a' : c.avgRate >= 50 ? GOLD : '#dc2626',
+                      }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {assignmentAnalysis.perAssignment.length === 0 && (
+                <p className="text-center text-gray-400 py-6 text-sm">No assignments yet.</p>
+              )}
+              <div className="divide-y divide-gray-50">
+                {assignmentAnalysis.perAssignment.map((p) => {
+                  const rateColor = p.rate >= 80 ? '#16a34a' : p.rate >= 50 ? GOLD : '#dc2626'
+                  const expanded = expandedAnalysisId === p.assignment.id
+                  return (
+                    <div key={p.assignment.id} className="py-2.5">
+                      <button
+                        onClick={() => setExpandedAnalysisId(expanded ? null : p.assignment.id)}
+                        className="w-full flex items-center justify-between gap-3 text-left"
+                      >
+                        <div className="min-w-0 flex items-center gap-2">
+                          <span className="px-2 py-0.5 rounded-full text-xs font-bold text-white flex-shrink-0" style={{ background: GOLD }}>{p.assignment.class}</span>
+                          <span className="text-sm font-medium text-gray-800 truncate">{p.assignment.title}</span>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <span className="text-xs text-gray-500">{p.submittedCount}/{p.total}</span>
+                          <span className="text-xs font-bold w-10 text-right" style={{ color: rateColor }}>{p.rate}%</span>
+                          <span className="text-gray-300 text-[10px]">{expanded ? '▲' : '▼'}</span>
+                        </div>
+                      </button>
+                      {expanded && (
+                        <div className="mt-2 pl-1">
+                          {p.missing.length === 0
+                            ? <p className="text-xs text-green-600">Everyone submitted 🎉</p>
+                            : (
+                              <>
+                                <p className="text-xs text-gray-400 mb-1.5">{p.missing.length} not submitted:</p>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {p.missing.map((s) => (
+                                    <span key={s.student_id} className="text-xs px-2 py-0.5 rounded-full bg-red-50 text-red-600 border border-red-100">{s.student_name}</span>
+                                  ))}
+                                </div>
+                              </>
+                            )}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
 
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
               <p className="text-sm font-semibold text-gray-700 mb-2">Send assignments from n8n</p>
