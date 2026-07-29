@@ -10,6 +10,35 @@ const GOLD  = '#c8860a'
 const NAV   = '#2d1200'
 const DARK  = '#1a0800'
 
+// Assignment dates are stored in UTC (timestamptz) — always display them in
+// Indian time regardless of the viewer's device timezone.
+function formatIST(isoString) {
+  if (!isoString) return '—'
+  return new Date(isoString).toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  })
+}
+
+// Status priority: a teacher-marked "completed" assignment always shows
+// Completed. Otherwise it's Submitted (student turned something in — late or
+// not) if they already did, Closed (teacher shut off submissions early —
+// distinct from Missing, since the deadline may not have passed yet), Missing
+// (deadline passed, nothing turned in) or Assigned (still open).
+function assignmentStatus(a, submission) {
+  if (a.completed) return { key: 'completed', label: '✓ Completed', color: '#16a34a', bg: 'rgba(34,197,94,0.12)' }
+  if (submission) {
+    const late = a.deadline && new Date(submission.submitted_at) > new Date(a.deadline)
+    return late
+      ? { key: 'submitted', label: '✓ Submitted late', color: '#16a34a', bg: 'rgba(34,197,94,0.12)' }
+      : { key: 'submitted', label: '✓ Submitted', color: '#16a34a', bg: 'rgba(34,197,94,0.12)' }
+  }
+  if (a.submissions_closed) return { key: 'closed', label: '🔒 Closed', color: '#6b7280', bg: 'rgba(107,114,128,0.14)' }
+  if (a.deadline && new Date(a.deadline) < new Date()) return { key: 'missing', label: 'Missing', color: '#dc2626', bg: 'rgba(220,38,38,0.12)' }
+  return { key: 'assigned', label: 'Assigned', color: GOLD, bg: 'rgba(200,134,10,0.12)' }
+}
+
 export default function StudentDashboard() {
   const navigate = useNavigate()
   const session = JSON.parse(localStorage.getItem('svm_session') || 'null')
@@ -21,6 +50,11 @@ export default function StudentDashboard() {
   const [sortBy, setSortBy] = useState('date-desc') // date-asc | date-desc | pct-asc | pct-desc | subject
   const [classRank, setClassRank] = useState(null)
   const [classSize, setClassSize] = useState(null)
+  const [assignments, setAssignments] = useState([])
+  const [submissions, setSubmissions] = useState([]) // this student's assignment_submissions rows
+  const [section, setSection] = useState('report') // report | assignments
+  const [assignmentFilter, setAssignmentFilter] = useState('all') // all | assigned | missing | submitted | completed
+  const [assignmentSort, setAssignmentSort] = useState('deadline-desc') // deadline-asc | deadline-desc | subject
 
   useEffect(() => {
     if (!session?.studentId) return
@@ -97,6 +131,63 @@ export default function StudentDashboard() {
     }
     computeRank()
   }, [session?.studentId, session?.class])
+
+  useEffect(() => {
+    if (!session?.class) return
+    async function loadAssignments() {
+      const { data } = await supabase
+        .from('assignments')
+        .select('*')
+        .eq('class', session.class)
+        .order('deadline', { ascending: false })
+      setAssignments(data || [])
+    }
+    loadAssignments()
+  }, [session?.class])
+
+  useEffect(() => {
+    if (!session?.studentId) return
+    async function load() {
+      const { data } = await supabase
+        .from('assignment_submissions')
+        .select('*')
+        .eq('student_id', session.studentId)
+      setSubmissions(data || [])
+    }
+    load()
+  }, [session?.studentId])
+
+  // Re-fetched (not run inside an effect) after a card's Turn in/Resubmit succeeds.
+  async function loadSubmissions() {
+    if (!session?.studentId) return
+    const { data } = await supabase
+      .from('assignment_submissions')
+      .select('*')
+      .eq('student_id', session.studentId)
+    setSubmissions(data || [])
+  }
+
+  const submissionByAssignment = useMemo(() => {
+    const map = {}
+    submissions.forEach((s) => { map[s.assignment_id] = s })
+    return map
+  }, [submissions])
+
+  const assignmentsWithStatus = useMemo(
+    () => assignments.map((a) => ({ ...a, submission: submissionByAssignment[a.id] || null, status: assignmentStatus(a, submissionByAssignment[a.id]) })),
+    [assignments, submissionByAssignment]
+  )
+
+  const missingCount  = useMemo(() => assignmentsWithStatus.filter((a) => a.status.key === 'missing').length, [assignmentsWithStatus])
+  const upcomingCount = useMemo(() => assignmentsWithStatus.filter((a) => a.status.key === 'assigned').length, [assignmentsWithStatus])
+
+  const displayedAssignments = useMemo(() => {
+    let rows = assignmentFilter === 'all' ? [...assignmentsWithStatus] : assignmentsWithStatus.filter((a) => a.status.key === assignmentFilter)
+    if (assignmentSort === 'deadline-asc')  rows.sort((a, b) => new Date(a.deadline) - new Date(b.deadline))
+    if (assignmentSort === 'deadline-desc') rows.sort((a, b) => new Date(b.deadline) - new Date(a.deadline))
+    if (assignmentSort === 'subject')       rows.sort((a, b) => a.subject.localeCompare(b.subject))
+    return rows
+  }, [assignmentsWithStatus, assignmentFilter, assignmentSort])
 
   function logout() {
     localStorage.removeItem('svm_session')
@@ -224,6 +315,28 @@ export default function StudentDashboard() {
 
       <div className="max-w-6xl mx-auto p-3 sm:p-6 space-y-5">
 
+        {/* ── SECTION SWITCHER ── */}
+        <div className="flex gap-2">
+          {[
+            { key: 'report',      label: '📊 My Report' },
+            { key: 'assignments', label: `📌 Assignments${assignments.length ? ` (${assignments.length})` : ''}${missingCount ? ` · ${missingCount} missing` : ''}` },
+          ].map(({ key, label }) => (
+            <button
+              key={key}
+              onClick={() => setSection(key)}
+              className="px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold transition"
+              style={section === key
+                ? { background: GOLD, color: 'white' }
+                : { background: 'rgba(255,255,255,0.06)', color: '#d4b483', border: '1px solid rgba(200,134,10,0.25)' }
+              }
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {section === 'report' && (
+        <>
         {/* ── SUMMARY ROW ── */}
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
           <StatCard label="Total Tests"  value={scores.length}     sub={`${appeared.length} appeared`} type="gold" />
@@ -470,6 +583,69 @@ export default function StudentDashboard() {
             </div>
           )}
         </div>
+        </>
+        )}
+
+        {/* ── ASSIGNMENTS SECTION ── */}
+        {section === 'assignments' && (
+          <div className="space-y-4">
+            {/* Quick view */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <StatCard label="Missing"  value={missingCount}  sub={missingCount ? 'Overdue — submit now' : 'All caught up'} type="red" />
+              <StatCard label="Upcoming" value={upcomingCount} sub="Due before deadline" type="gold" />
+              <StatCard label="Submitted" value={assignmentsWithStatus.filter((a) => a.status.key === 'submitted').length} sub="Turned in" type="green" />
+              <StatCard label="Completed" value={assignmentsWithStatus.filter((a) => a.status.key === 'completed').length} sub="Closed by teacher" type="brown" />
+            </div>
+
+            {/* Filter + Sort bar */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 px-3 sm:px-4 py-2.5 flex flex-wrap items-center gap-2">
+              <div className="flex gap-1.5 flex-wrap">
+                {[
+                  { key: 'all',       label: 'All' },
+                  { key: 'assigned',  label: 'Assigned' },
+                  { key: 'missing',   label: 'Missing' },
+                  { key: 'closed',    label: 'Closed' },
+                  { key: 'submitted', label: 'Submitted' },
+                  { key: 'completed', label: 'Completed' },
+                ].map((f) => (
+                  <button key={f.key} onClick={() => setAssignmentFilter(f.key)}
+                    className="px-3 py-1 rounded-full text-xs font-medium transition"
+                    style={assignmentFilter === f.key ? { background: GOLD, color: 'white' } : { background: 'rgba(200,134,10,0.12)', color: '#9a7040' }}
+                  >{f.label}</button>
+                ))}
+              </div>
+              <div className="w-px h-4 bg-gray-200 hidden sm:block" />
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-xs text-gray-400">Sort:</span>
+                {[
+                  { key: 'deadline-asc',  label: 'Deadline ↑' },
+                  { key: 'deadline-desc', label: 'Deadline ↓' },
+                  { key: 'subject',       label: 'Subject' },
+                ].map(({ key, label }) => (
+                  <button key={key} onClick={() => setAssignmentSort(key)}
+                    className="px-2.5 py-1 rounded text-xs font-medium transition"
+                    style={assignmentSort === key
+                      ? { background: 'rgba(200,134,10,0.22)', color: GOLD, border: '1px solid rgba(200,134,10,0.4)' }
+                      : { background: 'rgba(200,134,10,0.06)', color: '#9a7040', border: '1px solid rgba(200,134,10,0.2)' }}
+                  >{label}</button>
+                ))}
+              </div>
+              <span className="ml-auto text-xs text-gray-400">{displayedAssignments.length} shown</span>
+            </div>
+
+            {/* Cards */}
+            <div className="grid sm:grid-cols-2 gap-3">
+              {displayedAssignments.map((a) => (
+                <AssignmentCard key={a.id} a={a} session={session} onSubmitted={loadSubmissions} />
+              ))}
+            </div>
+            {displayedAssignments.length === 0 && (
+              <p className="text-center text-gray-400 py-10 text-sm bg-white rounded-xl shadow-sm border border-gray-100">
+                {assignments.length === 0 ? 'No assignments yet.' : 'Nothing matches this filter.'}
+              </p>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -550,6 +726,105 @@ function TopicTable({ topics, type }) {
           ))}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+const MAX_FILE_BYTES = 20 * 1024 * 1024
+
+function AssignmentCard({ a, session, onSubmitted }) {
+  const [file, setFile] = useState(null)
+  const [uploading, setUploading] = useState(false)
+  const [error, setError] = useState('')
+  const canTurnIn = a.status.key !== 'completed' && a.status.key !== 'closed'
+
+  function pickFile(e) {
+    const f = e.target.files?.[0] || null
+    setError('')
+    if (!f) { setFile(null); return }
+    if (f.type !== 'application/pdf') { setError('Only PDF files are accepted.'); setFile(null); return }
+    if (f.size > MAX_FILE_BYTES) { setError('File must be under 20 MB.'); setFile(null); return }
+    setFile(f)
+  }
+
+  async function submit() {
+    if (!file) return
+    setUploading(true)
+    setError('')
+    const form = new FormData()
+    form.append('file', file)
+    form.append('assignment_id', a.id)
+    form.append('student_id', session.studentId)
+    form.append('student_name', session.studentName)
+    form.append('class', session.class)
+    form.append('portion', a.portion || a.title || '')
+    form.append('folder', a.drive_folder_id || '')
+    form.append('worksheet', a.link || '')
+
+    const { data, error: fnErr } = await supabase.functions.invoke('submit-worksheet', { body: form })
+    setUploading(false)
+    if (fnErr || data?.ok === false) {
+      setError(data?.error || fnErr?.message || 'Upload failed. Please try again.')
+      return
+    }
+    setFile(null)
+    onSubmitted()
+  }
+
+  return (
+    <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 flex flex-col gap-3 overflow-hidden min-w-0">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${a.subject === 'Science' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>
+            {a.subject}
+          </span>
+          <p className="font-semibold text-gray-800 mt-1.5 truncate">{a.title}</p>
+          <p className="text-xs text-gray-400 mt-0.5">Due {formatIST(a.deadline)}</p>
+        </div>
+        <span className="text-xs font-semibold px-2.5 py-1 rounded-full whitespace-nowrap flex-shrink-0" style={{ background: a.status.bg, color: a.status.color }}>
+          {a.status.label}
+        </span>
+      </div>
+
+      {a.notes && (
+        <p className="text-xs text-gray-500 break-all line-clamp-2" title={a.notes}>{a.notes}</p>
+      )}
+
+      {a.link && (
+        <a href={a.link} target="_blank" rel="noreferrer" className="text-xs font-semibold self-start" style={{ color: GOLD }}>
+          📄 View worksheet ↗
+        </a>
+      )}
+
+      {a.submission && (
+        <p className="text-xs text-gray-500">
+          Turned in <span className="font-medium text-gray-700">{a.submission.file_name}</span> · {formatIST(a.submission.submitted_at)}
+        </p>
+      )}
+
+      {a.status.key === 'closed' && !a.submission && (
+        <p className="text-xs text-gray-400 border-t border-gray-100 pt-3">Your teacher has closed submissions for this assignment.</p>
+      )}
+
+      {canTurnIn && (
+        <div className="border-t border-gray-100 pt-3 flex flex-wrap items-center gap-2">
+          <label className="text-xs font-medium px-3 py-1.5 rounded-lg border cursor-pointer transition"
+            style={{ borderColor: 'rgba(200,134,10,0.35)', color: GOLD, background: 'rgba(200,134,10,0.06)' }}
+          >
+            {file ? file.name : '📎 Choose PDF'}
+            <input type="file" accept="application/pdf" className="hidden" onChange={pickFile} />
+          </label>
+          <button
+            onClick={submit}
+            disabled={!file || uploading}
+            className="text-xs font-semibold px-3 py-1.5 rounded-lg text-white transition disabled:opacity-40"
+            style={{ background: GOLD }}
+          >
+            {uploading ? 'Uploading…' : a.submission ? 'Resubmit' : a.status.key === 'missing' ? 'Turn in late' : 'Turn in'}
+          </button>
+        </div>
+      )}
+      {error && <p className="text-xs text-red-500">{error}</p>}
     </div>
   )
 }

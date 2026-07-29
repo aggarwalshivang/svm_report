@@ -14,7 +14,11 @@
 //   Body: { "class": "9", "subject": "Maths", "assignment_name": "Chapter 4 worksheet",
 //           "deadline": "2026-08-05T18:00:00+05:30",
 //           "link": "https://...", "other": "Optional notes",
-//           "created": "2026-08-01T10:00:00+05:30" }  // optional, defaults to now
+//           "created": "2026-08-01T10:00:00+05:30",  // optional, defaults to now
+//           "portion": "Arithmetic Progressions | 10 Qs | Class 10",  // optional — used as the
+//           "folder": "1C6HgTNaTd4QBYL2GtqjLZaunJ2nITBSB" }           // Google Drive folder id — both
+//           // are only needed if students will submit worksheets back through the
+//           // student-form-worksheet webhook for this assignment.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
@@ -47,6 +51,8 @@ Deno.serve(async (req) => {
     const link = (body.link ?? body.assignment_link) ? String(body.link ?? body.assignment_link).trim() : null
     const notesRaw = body.other ?? body.notes ?? null
     const notes = notesRaw ? String(notesRaw) : null
+    const portion = body.portion ? String(body.portion).trim() : null
+    const driveFolderId = body.folder ? String(body.folder).trim() : null
     const deadlineRaw = body.deadline
 
     if (!className || !subject || !title || !deadlineRaw) {
@@ -66,7 +72,11 @@ Deno.serve(async (req) => {
     const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
     const { data, error } = await admin
       .from('assignments')
-      .insert({ class: className, subject, title, deadline: deadline.toISOString(), link, notes, ...(createdAt ? { created_at: createdAt } : {}) })
+      .insert({
+        class: className, subject, title, deadline: deadline.toISOString(), link, notes,
+        portion, drive_folder_id: driveFolderId,
+        ...(createdAt ? { created_at: createdAt } : {}),
+      })
       .select('id')
       .single()
     if (error) throw error

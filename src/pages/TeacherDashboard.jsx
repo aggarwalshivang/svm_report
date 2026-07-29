@@ -101,6 +101,7 @@ export default function TeacherDashboard() {
   // Assignments tab state
   const [assignments, setAssignments] = useState([])
   const [deletingAssignmentId, setDeletingAssignmentId] = useState(null)
+  const [confirmDeleteAssignment, setConfirmDeleteAssignment] = useState(null)
   const [assignmentClass, setAssignmentClass] = useState('9')
 
   useEffect(() => {
@@ -440,7 +441,18 @@ export default function TeacherDashboard() {
     }
   }
 
+  async function toggleSubmissionsClosed(assignment) {
+    const submissions_closed = !assignment.submissions_closed
+    setAssignments((prev) => prev.map((a) => (a.id === assignment.id ? { ...a, submissions_closed } : a)))
+    const { data, error } = await supabase.from('assignments').update({ submissions_closed }).eq('id', assignment.id).select('id')
+    if (error || !data || data.length === 0) {
+      setAssignments((prev) => prev.map((a) => (a.id === assignment.id ? { ...a, submissions_closed: !submissions_closed } : a)))
+      alert(`Failed to update assignment: ${error?.message || 'blocked by Supabase (RLS)'}`)
+    }
+  }
+
   async function deleteAssignment(id) {
+    setConfirmDeleteAssignment(null)
     setDeletingAssignmentId(id)
     const { data, error } = await supabase.from('assignments').delete().eq('id', id).select('id')
     if (error) {
@@ -1204,6 +1216,16 @@ function ini(name) {
         {/* ── Assignments tab ── */}
         {view === 'assignments' && (
           <div className="space-y-4">
+            <a
+              href="https://n8n.saraswatividyamandir.com/form/64d64bc4-54e8-4921-ae7b-e112cc163726"
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-2 text-sm font-semibold px-4 py-2.5 rounded-lg text-white transition"
+              style={{ background: GOLD }}
+            >
+              📤 Upload Assignment / Worksheet ↗
+            </a>
+
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
               <p className="text-sm font-semibold text-gray-700 mb-2">Send assignments from n8n</p>
               <p className="text-xs text-gray-500 mb-2">
@@ -1219,63 +1241,81 @@ x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
   "subject": "Maths",
   "assignment_name": "Chapter 4 worksheet",
   "deadline": "2026-08-05T18:00:00+05:30",
-  "link": "https://...",
-  "other": "Optional notes"
+  "link": "https://drive.google.com/file/d/.../view",
+  "other": "Optional notes",
+  "portion": "Chapter 4 | 10 Qs | Class 9",
+  "folder": "<Google Drive folder id for submissions>"
 }`}
               </pre>
+              <p className="text-[11px] text-gray-400 mt-2">
+                <code className="bg-gray-100 px-1 rounded">link</code>, <code className="bg-gray-100 px-1 rounded">portion</code> and <code className="bg-gray-100 px-1 rounded">folder</code> are only needed if students should be able to submit worksheets back for this assignment.
+              </p>
             </div>
 
             <div className="bg-white rounded-xl shadow overflow-hidden">
               <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+                <table className="w-full text-sm table-fixed">
                   <thead>
                     <tr className="text-left text-xs text-gray-300 uppercase tracking-wide" style={{ background: '#120600' }}>
-                      <th className="px-3 sm:px-5 py-3">Class</th>
-                      <th className="px-3 sm:px-5 py-3">Subject</th>
-                      <th className="px-3 sm:px-5 py-3">Assignment</th>
-                      <th className="px-3 sm:px-5 py-3">Deadline</th>
-                      <th className="px-3 sm:px-5 py-3">Link</th>
-                      <th className="px-3 sm:px-5 py-3 hidden md:table-cell">Notes</th>
-                      <th className="px-3 sm:px-5 py-3 hidden lg:table-cell">Created</th>
-                      <th className="px-3 sm:px-5 py-3 text-center">Status</th>
-                      <th className="px-3 sm:px-5 py-3 text-center">Remove</th>
+                      <th className="px-3 sm:px-5 py-3 w-auto">Assignment</th>
+                      <th className="px-3 sm:px-5 py-3 w-32">Deadline</th>
+                      <th className="px-3 sm:px-5 py-3 text-center w-40">Status</th>
+                      <th className="px-3 sm:px-5 py-3 text-center w-20">Remove</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
                     {filteredAssignments.map((a) => (
                       <tr key={a.id} className={a.completed ? 'opacity-60' : ''}>
-                        <td className="px-3 sm:px-5 py-3">
-                          <span className="px-2 py-0.5 rounded-full text-xs font-bold text-white" style={{ background: GOLD }}>{a.class}</span>
+                        <td className="px-3 sm:px-5 py-3 align-top">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium flex-shrink-0 ${a.subject === 'Science' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>
+                              {a.subject}
+                            </span>
+                            <span className="font-medium text-gray-800 break-words">{a.title}</span>
+                          </div>
+                          {a.link && (
+                            <a href={a.link} target="_blank" rel="noreferrer"
+                              className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full mt-1.5 transition"
+                              style={{ background: 'rgba(200,134,10,0.14)', color: GOLD, border: '1px solid rgba(200,134,10,0.35)' }}
+                            >
+                              📄 Worksheet ↗
+                            </a>
+                          )}
+                          <p className="text-[10px] text-gray-300 mt-1.5">Created {formatIST(a.created_at)}</p>
                         </td>
-                        <td className="px-3 sm:px-5 py-3 text-gray-600">{a.subject}</td>
-                        <td className="px-3 sm:px-5 py-3 font-medium text-gray-800">{a.title}</td>
-                        <td className="px-3 sm:px-5 py-3 whitespace-nowrap text-gray-700">{formatIST(a.deadline)}</td>
-                        <td className="px-3 sm:px-5 py-3">
-                          {a.link
-                            ? <a href={a.link} target="_blank" rel="noreferrer" className="text-xs font-medium" style={{ color: GOLD }}>Open ↗</a>
-                            : <span className="text-gray-300 text-xs">—</span>}
+                        <td className="px-3 sm:px-5 py-3 align-top whitespace-nowrap text-gray-700 text-xs">{formatIST(a.deadline)}</td>
+                        <td className="px-3 sm:px-5 py-3 align-top text-center">
+                          <div className="flex flex-col items-stretch gap-1.5">
+                            <button
+                              onClick={() => toggleAssignmentCompleted(a)}
+                              className="text-xs font-semibold px-2.5 py-1 rounded-full transition"
+                              style={a.completed
+                                ? { background: 'rgba(34,197,94,0.12)', color: '#16a34a' }
+                                : { background: 'rgba(200,134,10,0.12)', color: GOLD }
+                              }
+                            >
+                              {a.completed ? '✓ Completed' : 'Mark Completed'}
+                            </button>
+                            <button
+                              onClick={() => toggleSubmissionsClosed(a)}
+                              title={a.submissions_closed ? 'Students can no longer turn in this assignment' : 'Stop accepting new submissions, even before the deadline'}
+                              className="text-xs font-semibold px-2.5 py-1 rounded-full transition"
+                              style={a.submissions_closed
+                                ? { background: 'rgba(239,68,68,0.12)', color: '#dc2626' }
+                                : { background: 'rgba(107,114,128,0.12)', color: '#6b7280' }
+                              }
+                            >
+                              {a.submissions_closed ? '🔒 Closed' : 'Close Submissions'}
+                            </button>
+                          </div>
                         </td>
-                        <td className="px-3 sm:px-5 py-3 text-gray-500 text-xs hidden md:table-cell">{a.notes || '—'}</td>
-                        <td className="px-3 sm:px-5 py-3 text-gray-400 text-xs whitespace-nowrap hidden lg:table-cell">{formatIST(a.created_at)}</td>
-                        <td className="px-3 sm:px-5 py-3 text-center">
+                        <td className="px-3 sm:px-5 py-3 align-top text-center">
                           <button
-                            onClick={() => toggleAssignmentCompleted(a)}
-                            className="text-xs font-semibold px-2.5 py-1 rounded-full transition"
-                            style={a.completed
-                              ? { background: 'rgba(34,197,94,0.12)', color: '#16a34a' }
-                              : { background: 'rgba(200,134,10,0.12)', color: GOLD }
-                            }
-                          >
-                            {a.completed ? '✓ Completed' : 'Mark Completed'}
-                          </button>
-                        </td>
-                        <td className="px-3 sm:px-5 py-3 text-center">
-                          <button
-                            onClick={() => { if (window.confirm(`Remove "${a.title}"?`)) deleteAssignment(a.id) }}
+                            onClick={() => setConfirmDeleteAssignment(a)}
                             disabled={deletingAssignmentId === a.id}
                             className="text-xs font-medium text-red-500 hover:text-red-600 transition disabled:opacity-50"
                           >
-                            {deletingAssignmentId === a.id ? 'Removing…' : 'Remove'}
+                            {deletingAssignmentId === a.id ? '…' : 'Remove'}
                           </button>
                         </td>
                       </tr>
@@ -1646,6 +1686,15 @@ x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
         />
       )}
 
+      {confirmDeleteAssignment && (
+        <ConfirmDeleteAssignmentModal
+          assignment={confirmDeleteAssignment}
+          teacherEmail={session?.email}
+          onCancel={() => setConfirmDeleteAssignment(null)}
+          onConfirm={() => deleteAssignment(confirmDeleteAssignment.id)}
+        />
+      )}
+
       {previewTest && (
         <SendReportPreviewModal
           test={previewTest}
@@ -1920,6 +1969,141 @@ function ConfirmDeleteStudentModal({ student, teacherEmail, onCancel, onConfirm 
                 className="text-sm font-semibold px-4 py-2 rounded-lg text-white bg-red-500 hover:bg-red-600 transition disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 {verifying ? 'Verifying…' : 'Delete Student'}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+const DELETE_ASSIGNMENT_OTP_PURPOSE = 'delete-assignment'
+
+function ConfirmDeleteAssignmentModal({ assignment, teacherEmail, onCancel, onConfirm }) {
+  const [step, setStep] = useState('confirm') // confirm | otp
+  const [code, setCode] = useState('')
+  const [sending, setSending] = useState(false)
+  const [verifying, setVerifying] = useState(false)
+  const [error, setError] = useState('')
+  const [cooldown, setCooldown] = useState(0)
+  const cooldownRef = useRef(null)
+
+  useEffect(() => () => clearInterval(cooldownRef.current), [])
+
+  function startCooldown() {
+    setCooldown(OTP_RESEND_COOLDOWN)
+    clearInterval(cooldownRef.current)
+    cooldownRef.current = setInterval(() => {
+      setCooldown((c) => {
+        if (c <= 1) { clearInterval(cooldownRef.current); return 0 }
+        return c - 1
+      })
+    }, 1000)
+  }
+
+  async function sendCode() {
+    setError('')
+    setSending(true)
+    const { data, error: fnErr } = await supabase.functions.invoke('send-action-otp', {
+      body: { purpose: DELETE_ASSIGNMENT_OTP_PURPOSE },
+    })
+    setSending(false)
+    if (fnErr || data?.ok === false) {
+      setError(data?.error || 'Could not send code. Please try again.')
+      return
+    }
+    startCooldown()
+    setStep('otp')
+  }
+
+  async function verifyAndConfirm() {
+    setError('')
+    setVerifying(true)
+    const { data, error: fnErr } = await supabase.functions.invoke('verify-action-otp', {
+      body: { code: code.trim(), purpose: DELETE_ASSIGNMENT_OTP_PURPOSE },
+    })
+    setVerifying(false)
+    if (fnErr || data?.ok === false) {
+      setError(data?.error || 'Invalid or expired code.')
+      return
+    }
+    onConfirm()
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onCancel}>
+      <div
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="text-lg font-bold text-gray-800 mb-1">Remove "{assignment.title}"?</h3>
+        <p className="text-sm text-gray-500 mb-4">
+          This permanently removes the assignment and its worksheet link for every student in Class {assignment.class}. This cannot be undone.
+        </p>
+
+        {step === 'confirm' ? (
+          <>
+            {error && (
+              <div className="rounded-lg px-3 py-2 text-xs mb-4 bg-red-50 border border-red-200 text-red-600">{error}</div>
+            )}
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={onCancel}
+                className="text-sm font-medium px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={sendCode}
+                disabled={sending}
+                className="text-sm font-semibold px-4 py-2 rounded-lg text-white bg-red-500 hover:bg-red-600 transition disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {sending ? 'Sending code…' : 'Send Confirmation Code'}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="text-xs text-gray-500 mb-2">
+              Enter the 6-digit code sent to <span className="font-medium text-gray-700">{teacherEmail}</span> to remove this assignment:
+            </p>
+            <input
+              autoFocus
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]{6}"
+              maxLength={6}
+              value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+              onKeyDown={(e) => { if (e.key === 'Enter' && code.length === 6) verifyAndConfirm() }}
+              placeholder="123456"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-2 tracking-[0.3em] text-center focus:outline-none focus:ring-2 focus:ring-red-200"
+            />
+            <button
+              type="button"
+              disabled={cooldown > 0 || sending}
+              onClick={sendCode}
+              className="text-xs font-medium mb-4 disabled:text-gray-400 text-red-600"
+            >
+              {cooldown > 0 ? `Resend code in ${cooldown}s` : 'Resend code'}
+            </button>
+            {error && (
+              <div className="rounded-lg px-3 py-2 text-xs mb-4 bg-red-50 border border-red-200 text-red-600">{error}</div>
+            )}
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={onCancel}
+                className="text-sm font-medium px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={verifyAndConfirm}
+                disabled={code.length !== 6 || verifying}
+                className="text-sm font-semibold px-4 py-2 rounded-lg text-white bg-red-500 hover:bg-red-600 transition disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {verifying ? 'Verifying…' : 'Remove Assignment'}
               </button>
             </div>
           </>

@@ -28,6 +28,7 @@ const corsHeaders = {
 // so this function can't be used to send arbitrary emails.
 const PURPOSE_COPY: Record<string, { subject: string; verb: string }> = {
   'delete-student': { subject: 'Confirm deleting a student', verb: 'permanently delete a student and all of their reports' },
+  'delete-assignment': { subject: 'Confirm removing an assignment', verb: 'permanently remove an assignment and its worksheet link' },
 }
 
 async function hashCode(code: string) {
