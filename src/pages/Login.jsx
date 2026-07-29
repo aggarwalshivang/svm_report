@@ -1,6 +1,8 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+
+const RESEND_COOLDOWN = 45 // seconds, must match send-password-otp's cooldown
 
 const GOLD = '#c8860a'
 const NAV  = '#2d1200'
@@ -13,8 +15,12 @@ export default function Login() {
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [forgotMode, setForgotMode] = useState(false)
-  const [resetSent, setResetSent] = useState(false)
+  const [forgotStep, setForgotStep] = useState('closed') // closed | request | verify | done
+  const [code, setCode] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [cooldown, setCooldown] = useState(0)
+  const cooldownRef = useRef(null)
 
   async function handleLogin(e) {
     e.preventDefault()
@@ -70,17 +76,69 @@ export default function Login() {
     navigate('/student')
   }
 
-  async function handleForgotPassword(e) {
-    e.preventDefault()
+  function startCooldown() {
+    setCooldown(RESEND_COOLDOWN)
+    clearInterval(cooldownRef.current)
+    cooldownRef.current = setInterval(() => {
+      setCooldown((c) => {
+        if (c <= 1) { clearInterval(cooldownRef.current); return 0 }
+        return c - 1
+      })
+    }, 1000)
+  }
+
+  useEffect(() => () => clearInterval(cooldownRef.current), [])
+
+  async function sendOtp() {
     setError('')
     setLoading(true)
-    const { error: resetErr } = await supabase.auth.resetPasswordForEmail(
-      email.trim().toLowerCase(),
-      { redirectTo: `${window.location.origin}/reset-password` }
-    )
+    const { data, error: fnErr } = await supabase.functions.invoke('send-password-otp', {
+      body: { email: email.trim().toLowerCase() },
+    })
     setLoading(false)
-    if (resetErr) { setError('Could not send reset email. Check the address and try again.'); return }
-    setResetSent(true)
+    if (fnErr || data?.ok === false) {
+      setError(data?.error || 'Could not send code. Check the address and try again.')
+      return false
+    }
+    startCooldown()
+    return true
+  }
+
+  async function handleRequestOtp(e) {
+    e.preventDefault()
+    if (await sendOtp()) setForgotStep('verify')
+  }
+
+  async function handleResendOtp() {
+    if (cooldown > 0) return
+    await sendOtp()
+  }
+
+  async function handleVerifyOtp(e) {
+    e.preventDefault()
+    setError('')
+    if (newPassword !== confirmPassword) { setError('Passwords do not match.'); return }
+    if (newPassword.length < 6) { setError('Password must be at least 6 characters.'); return }
+    setLoading(true)
+    const { data, error: fnErr } = await supabase.functions.invoke('verify-password-otp', {
+      body: { email: email.trim().toLowerCase(), code: code.trim(), newPassword },
+    })
+    setLoading(false)
+    if (fnErr || data?.ok === false) {
+      setError(data?.error || 'Invalid or expired code.')
+      return
+    }
+    setForgotStep('done')
+  }
+
+  function resetForgotState() {
+    setForgotStep('closed')
+    setCode('')
+    setNewPassword('')
+    setConfirmPassword('')
+    setCooldown(0)
+    clearInterval(cooldownRef.current)
+    setError('')
   }
 
   const inputStyle = {
@@ -122,62 +180,141 @@ export default function Login() {
           ))}
         </div>
 
-        {forgotMode ? (
-          resetSent ? (
-            <div className="text-center space-y-4">
-              <div className="w-14 h-14 rounded-full flex items-center justify-center mx-auto" style={{ background: 'rgba(200,134,10,0.15)' }}>
-                <span className="text-2xl">📧</span>
-              </div>
-              <p className="font-semibold" style={{ color: '#f5ede0' }}>Reset link sent!</p>
-              <p className="text-sm" style={{ color: '#9a7040' }}>Check <span className="font-medium" style={{ color: '#d4b483' }}>{email}</span> for the password reset link.</p>
-              <button
-                onClick={() => { setForgotMode(false); setResetSent(false); setError('') }}
-                className="text-sm font-medium"
-                style={{ color: GOLD }}
-              >
-                ← Back to Login
-              </button>
+        {forgotStep === 'done' ? (
+          <div className="text-center space-y-4">
+            <div className="w-14 h-14 rounded-full flex items-center justify-center mx-auto" style={{ background: 'rgba(200,134,10,0.15)' }}>
+              <span className="text-2xl">✅</span>
             </div>
-          ) : (
-            <form onSubmit={handleForgotPassword} className="space-y-4">
-              <p className="text-sm" style={{ color: '#9a7040' }}>Enter your {role === 'teacher' ? 'teacher' : 'student'} email and we'll send a password reset link.</p>
-              <div>
-                <label className="block text-sm font-medium mb-1" style={{ color: '#d4b483' }}>Email</label>
-                <input
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder={role === 'student' ? 'your@gmail.com' : 'admin@saraswatividyamandir.com'}
-                  className="w-full px-4 py-3 rounded-lg focus:outline-none"
-                  style={inputStyle}
-                  onFocus={(e) => e.target.style.boxShadow = '0 0 0 2px #c8860a40'}
-                  onBlur={(e) => e.target.style.boxShadow = ''}
-                />
-              </div>
-              {error && (
-                <div className="rounded-lg px-4 py-3 text-sm" style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.25)', color: '#f87171' }}>{error}</div>
-              )}
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full text-white font-semibold py-3 rounded-lg transition-all"
-                style={{ background: loading ? '#a06d08' : GOLD }}
-                onMouseEnter={(e) => { if (!loading) e.currentTarget.style.background = '#a06d08' }}
-                onMouseLeave={(e) => { if (!loading) e.currentTarget.style.background = GOLD }}
-              >
-                {loading ? 'Sending…' : 'Send Reset Link'}
-              </button>
-              <button
-                type="button"
-                onClick={() => { setForgotMode(false); setError('') }}
-                className="w-full text-sm font-medium py-2"
-                style={{ color: GOLD }}
-              >
-                ← Back to Login
-              </button>
-            </form>
-          )
+            <p className="font-semibold" style={{ color: '#f5ede0' }}>Password updated!</p>
+            <p className="text-sm" style={{ color: '#9a7040' }}>You can now log in with your new password.</p>
+            <button
+              onClick={resetForgotState}
+              className="text-sm font-medium"
+              style={{ color: GOLD }}
+            >
+              ← Back to Login
+            </button>
+          </div>
+        ) : forgotStep === 'verify' ? (
+          <form onSubmit={handleVerifyOtp} className="space-y-4">
+            <p className="text-sm" style={{ color: '#9a7040' }}>
+              Enter the 6-digit code sent to <span className="font-medium" style={{ color: '#d4b483' }}>{email}</span> and choose a new password.
+            </p>
+            <div>
+              <label className="block text-sm font-medium mb-1" style={{ color: '#d4b483' }}>Code</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]{6}"
+                maxLength={6}
+                required
+                value={code}
+                onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+                placeholder="123456"
+                className="w-full px-4 py-3 rounded-lg focus:outline-none tracking-[0.3em] text-center"
+                style={inputStyle}
+                onFocus={(e) => e.target.style.boxShadow = '0 0 0 2px #c8860a40'}
+                onBlur={(e) => e.target.style.boxShadow = ''}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1" style={{ color: '#d4b483' }}>New Password</label>
+              <input
+                type="password"
+                required
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="Min. 6 characters"
+                className="w-full px-4 py-3 rounded-lg focus:outline-none"
+                style={inputStyle}
+                onFocus={(e) => e.target.style.boxShadow = '0 0 0 2px #c8860a40'}
+                onBlur={(e) => e.target.style.boxShadow = ''}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1" style={{ color: '#d4b483' }}>Confirm Password</label>
+              <input
+                type="password"
+                required
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="Repeat new password"
+                className="w-full px-4 py-3 rounded-lg focus:outline-none"
+                style={inputStyle}
+                onFocus={(e) => e.target.style.boxShadow = '0 0 0 2px #c8860a40'}
+                onBlur={(e) => e.target.style.boxShadow = ''}
+              />
+            </div>
+            {error && (
+              <div className="rounded-lg px-4 py-3 text-sm" style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.25)', color: '#f87171' }}>{error}</div>
+            )}
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full text-white font-semibold py-3 rounded-lg transition-all"
+              style={{ background: loading ? '#a06d08' : GOLD }}
+              onMouseEnter={(e) => { if (!loading) e.currentTarget.style.background = '#a06d08' }}
+              onMouseLeave={(e) => { if (!loading) e.currentTarget.style.background = GOLD }}
+            >
+              {loading ? 'Verifying…' : 'Reset Password'}
+            </button>
+            <button
+              type="button"
+              disabled={cooldown > 0 || loading}
+              onClick={handleResendOtp}
+              className="w-full text-sm font-medium py-2"
+              style={{ color: cooldown > 0 ? '#7a5030' : GOLD }}
+            >
+              {cooldown > 0 ? `Resend code in ${cooldown}s` : 'Resend code'}
+            </button>
+            <button
+              type="button"
+              onClick={resetForgotState}
+              className="w-full text-sm font-medium py-2"
+              style={{ color: GOLD }}
+            >
+              ← Back to Login
+            </button>
+          </form>
+        ) : forgotStep === 'request' ? (
+          <form onSubmit={handleRequestOtp} className="space-y-4">
+            <p className="text-sm" style={{ color: '#9a7040' }}>Enter your {role === 'teacher' ? 'teacher' : 'student'} email and we'll send a 6-digit code.</p>
+            <div>
+              <label className="block text-sm font-medium mb-1" style={{ color: '#d4b483' }}>Email</label>
+              <input
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder={role === 'student' ? 'your@gmail.com' : 'admin@saraswatividyamandir.com'}
+                className="w-full px-4 py-3 rounded-lg focus:outline-none"
+                style={inputStyle}
+                onFocus={(e) => e.target.style.boxShadow = '0 0 0 2px #c8860a40'}
+                onBlur={(e) => e.target.style.boxShadow = ''}
+              />
+            </div>
+            {error && (
+              <div className="rounded-lg px-4 py-3 text-sm" style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.25)', color: '#f87171' }}>{error}</div>
+            )}
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full text-white font-semibold py-3 rounded-lg transition-all"
+              style={{ background: loading ? '#a06d08' : GOLD }}
+              onMouseEnter={(e) => { if (!loading) e.currentTarget.style.background = '#a06d08' }}
+              onMouseLeave={(e) => { if (!loading) e.currentTarget.style.background = GOLD }}
+            >
+              {loading ? 'Sending…' : 'Send Code'}
+            </button>
+            <button
+              type="button"
+              onClick={resetForgotState}
+              className="w-full text-sm font-medium py-2"
+              style={{ color: GOLD }}
+            >
+              ← Back to Login
+            </button>
+          </form>
         ) : (
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
@@ -202,7 +339,7 @@ export default function Login() {
                 <label className="block text-sm font-medium" style={{ color: '#d4b483' }}>Password</label>
                 <button
                   type="button"
-                  onClick={() => { setForgotMode(true); setError('') }}
+                  onClick={() => { setForgotStep('request'); setError('') }}
                   className="text-xs font-medium"
                   style={{ color: GOLD }}
                 >

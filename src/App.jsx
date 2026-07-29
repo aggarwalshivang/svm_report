@@ -4,7 +4,6 @@ import { supabase } from './lib/supabase'
 import Login from './pages/Login'
 import StudentDashboard from './pages/StudentDashboard'
 import TeacherDashboard from './pages/TeacherDashboard'
-import ResetPassword from './pages/ResetPassword'
 
 function StudentRoute({ children }) {
   const session = JSON.parse(localStorage.getItem('svm_session') || 'null')
@@ -32,7 +31,6 @@ export default function App() {
       <Route path="/" element={<Login />} />
       <Route path="/student" element={<StudentRoute><StudentDashboard /></StudentRoute>} />
       <Route path="/teacher" element={<TeacherRoute><TeacherDashboard /></TeacherRoute>} />
-      <Route path="/reset-password" element={<ResetPassword />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )
