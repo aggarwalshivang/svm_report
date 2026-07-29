@@ -1,14 +1,12 @@
-// Creates a Supabase Auth account for a newly added student and emails them a
-// one-time code so they can set their own password, via Login.jsx's "Forgot
-// password" flow (verified by verify-password-otp). Accounts are created with
-// a random, unknown password — nobody but the student ever sets it. Called
-// from TeacherDashboard's "Create Dashboard" button.
+// Sends a 6-digit confirmation code, via Resend, to the currently
+// authenticated teacher's own email address — used to gate sensitive actions
+// (e.g. deleting a student) behind an emailed code before they happen.
+// Verified by verify-action-otp. The email is always derived from the
+// caller's auth token, never from the request body, so a teacher can only
+// send/verify codes for their own address.
 //
 // Deploy:
-//   npx supabase login
-//   npx supabase link --project-ref cexbpkbadthoqbruyjdg
-//   npx supabase secrets set RESEND_API_KEY=... RESEND_FROM="Saraswati VidyaMandir <no-reply@otp.saraswatividyamandir.com>"
-//   npx supabase functions deploy create-student-account --no-verify-jwt
+//   npx supabase functions deploy send-action-otp --no-verify-jwt
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
@@ -26,10 +24,10 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-function randomPassword() {
-  const bytes = new Uint8Array(24)
-  crypto.getRandomValues(bytes)
-  return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('')
+// Known purposes and the copy shown in the confirmation email. Reject anything else
+// so this function can't be used to send arbitrary emails.
+const PURPOSE_COPY: Record<string, { subject: string; verb: string }> = {
+  'delete-student': { subject: 'Confirm deleting a student', verb: 'permanently delete a student and all of their reports' },
 }
 
 async function hashCode(code: string) {
@@ -49,45 +47,32 @@ Deno.serve(async (req) => {
     })
 
   try {
-    // Only a logged-in teacher may trigger account creation.
     const token = (req.headers.get('Authorization') ?? '').replace('Bearer ', '')
     if (!token) throw new Error('Missing Authorization header')
     const { data: caller, error: callerErr } = await admin.auth.getUser(token)
-    if (callerErr || !caller?.user) throw new Error('Not authenticated')
+    if (callerErr || !caller?.user?.email) throw new Error('Not authenticated')
+    const email = caller.user.email.toLowerCase()
 
-    const { email, student_id, student_name } = await req.json()
-    if (!email || !student_id) throw new Error('email and student_id are required')
-    const normalizedEmail = String(email).trim().toLowerCase()
+    const { purpose } = await req.json()
+    const copy = PURPOSE_COPY[purpose]
+    if (!copy) throw new Error('Unknown purpose')
 
-    const { error: createErr } = await admin.auth.admin.createUser({
-      email: normalizedEmail,
-      password: randomPassword(), // unknown to everyone — the student sets their own via the emailed code
-      email_confirm: true,
-      user_metadata: { role: 'student', student_id, student_name },
-    })
-
-    if (createErr) {
-      const msg = createErr.message?.toLowerCase() ?? ''
-      const alreadyExists = msg.includes('already been registered') || msg.includes('already exists')
-      if (!alreadyExists) throw createErr
-    }
-
-    // Rate-limit welcome emails the same way send-password-otp rate-limits resets.
     const now = Date.now()
     const { data: recent, error: recentErr } = await admin
-      .from('password_reset_otps')
+      .from('action_otps')
       .select('created_at')
-      .eq('email', normalizedEmail)
+      .eq('email', email)
+      .eq('purpose', purpose)
       .order('created_at', { ascending: false })
       .limit(MAX_SENDS_PER_HOUR)
     if (recentErr) throw recentErr
 
     if (recent?.[0] && now - new Date(recent[0].created_at).getTime() < RESEND_COOLDOWN_MS) {
-      return fail('An email was just sent to this address. Please wait before retrying.', 429)
+      return fail('Please wait before requesting another code.', 429)
     }
     const sentInLastHour = (recent ?? []).filter((r) => now - new Date(r.created_at).getTime() < 60 * 60 * 1000)
     if (sentInLastHour.length >= MAX_SENDS_PER_HOUR) {
-      return fail('Too many emails sent to this address recently. Try again later.', 429)
+      return fail('Too many requests. Try again later.', 429)
     }
 
     const code = Math.floor(100000 + Math.random() * 900000).toString()
@@ -95,8 +80,8 @@ Deno.serve(async (req) => {
     const expires_at = new Date(now + OTP_TTL_MS).toISOString()
 
     const { error: insertErr } = await admin
-      .from('password_reset_otps')
-      .insert({ email: normalizedEmail, code_hash, expires_at })
+      .from('action_otps')
+      .insert({ email, purpose, code_hash, expires_at })
     if (insertErr) throw insertErr
 
     const emailResp = await fetch('https://api.resend.com/emails', {
@@ -104,13 +89,11 @@ Deno.serve(async (req) => {
       headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         from: RESEND_FROM,
-        to: [normalizedEmail],
-        subject: 'Your Saraswati VidyaMandir dashboard is ready — set your password',
-        html: `<p>Hi${student_name ? ' ' + String(student_name) : ''},</p>
-               <p>Your student dashboard has been created. Use the code below to set your own password:</p>
+        to: [email],
+        subject: copy.subject,
+        html: `<p>Use this code to confirm you want to ${copy.verb}:</p>
                <p style="font-size:28px;font-weight:bold;letter-spacing:4px;">${code}</p>
-               <p>Go to the login page, choose <strong>Student</strong>, click <strong>Forgot password?</strong>, enter your email and this code, then choose a password.</p>
-               <p>This code expires in 10 minutes. If you didn't expect this email, you can ignore it.</p>`,
+               <p>This code expires in 10 minutes. If you didn't request this, you can ignore this email.</p>`,
       }),
     })
     if (!emailResp.ok) {

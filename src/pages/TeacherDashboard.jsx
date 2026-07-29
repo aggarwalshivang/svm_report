@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   ComposedChart, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -9,10 +9,9 @@ import { supabase } from '../lib/supabase'
 const GOLD = '#c8860a'
 const NAV  = '#2d1200'
 const DARK = '#1a0800'
-const STUDENT_DEFAULT_PASSWORD = 'Svm@2026'
-
-// Creates the student's login (default password) via a Supabase Edge Function —
-// it needs the service-role key, which must never live in browser code.
+// Creates the student's login and emails them a code to set their own
+// password, via a Supabase Edge Function — it needs the service-role key,
+// which must never live in browser code.
 async function provisionStudentAccount(email, studentId, studentName) {
   const { data, error } = await supabase.functions.invoke('create-student-account', {
     body: { email, student_id: studentId, student_name: studentName },
@@ -26,6 +25,17 @@ async function provisionStudentAccount(email, studentId, studentName) {
 // added mid-year) so pre-enrollment tests never count toward their stats.
 function countsForStudent(row, student) {
   return !student?.report_start_date || row.date >= student.report_start_date
+}
+
+// Assignment dates are stored in UTC (timestamptz) — always display them in
+// Indian time regardless of the viewer's device timezone.
+function formatIST(isoString) {
+  if (!isoString) return '—'
+  return new Date(isoString).toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  })
 }
 
 export default function TeacherDashboard() {
@@ -88,12 +98,19 @@ export default function TeacherDashboard() {
   const [savingSourceId, setSavingSourceId] = useState(false)
   const [creatingLoginId, setCreatingLoginId] = useState(null)
 
+  // Assignments tab state
+  const [assignments, setAssignments] = useState([])
+  const [deletingAssignmentId, setDeletingAssignmentId] = useState(null)
+  const [assignmentClass, setAssignmentClass] = useState('9')
+
   useEffect(() => {
     async function load() {
-      const [{ data: studs }] = await Promise.all([
+      const [{ data: studs }, { data: asgn }] = await Promise.all([
         supabase.from('student_emails').select('*').order('class').order('student_name'),
+        supabase.from('assignments').select('*').order('deadline'),
       ])
       setStudents(studs || [])
+      setAssignments(asgn || [])
 
       // Supabase caps at 1000 rows by default — page through all score records
       const PAGE = 1000
@@ -225,6 +242,10 @@ export default function TeacherDashboard() {
   }, [allScores, students])
 
   const filteredTests = uniqueTests.filter((t) => classFilter === 'All' || String(t.class) === classFilter)
+
+  const filteredAssignments = assignments
+    .filter((a) => String(a.class) === assignmentClass)
+    .filter((a) => !search || a.title.toLowerCase().includes(search.toLowerCase()) || a.subject.toLowerCase().includes(search.toLowerCase()))
 
   const topPctThreshold = Number(topPctFilter) / 100
 
@@ -409,6 +430,29 @@ export default function TeacherDashboard() {
     setDeletingStudentId(null)
   }
 
+  async function toggleAssignmentCompleted(assignment) {
+    const completed = !assignment.completed
+    setAssignments((prev) => prev.map((a) => (a.id === assignment.id ? { ...a, completed } : a)))
+    const { data, error } = await supabase.from('assignments').update({ completed }).eq('id', assignment.id).select('id')
+    if (error || !data || data.length === 0) {
+      setAssignments((prev) => prev.map((a) => (a.id === assignment.id ? { ...a, completed: !completed } : a)))
+      alert(`Failed to update assignment: ${error?.message || 'blocked by Supabase (RLS)'}`)
+    }
+  }
+
+  async function deleteAssignment(id) {
+    setDeletingAssignmentId(id)
+    const { data, error } = await supabase.from('assignments').delete().eq('id', id).select('id')
+    if (error) {
+      alert(`Failed to delete assignment: ${error.message}`)
+    } else if (!data || data.length === 0) {
+      alert("Delete was blocked by Supabase (likely a Row Level Security policy) — the assignment was not removed.")
+    } else {
+      setAssignments((prev) => prev.filter((a) => a.id !== id))
+    }
+    setDeletingAssignmentId(null)
+  }
+
   async function addEmailToStudent(student) {
     const email = pendingEmail.trim().toLowerCase()
     if (!email) return
@@ -446,7 +490,7 @@ export default function TeacherDashboard() {
     if (failed.length) {
       alert(`Could not create login for: ${failed.map((f) => f.email).join(', ')}\n\n${failed[0].message}`)
     } else {
-      alert(`Dashboard created.\nLogin: ${pendingEmails.map((e) => e.email).join(', ')}\nDefault password: ${STUDENT_DEFAULT_PASSWORD}`)
+      alert(`Dashboard created.\nAn email was sent to ${pendingEmails.map((e) => e.email).join(', ')} with a code to set their password.`)
     }
     setCreatingLoginId(null)
   }
@@ -565,6 +609,7 @@ export default function TeacherDashboard() {
                 { k: 'analysis', label: 'Analysis', icon: '📊' },
                 { k: 'tests',    label: 'Tests',    icon: '📋' },
                 { k: 'toppers',  label: 'Toppers',  icon: '🏆' },
+                { k: 'assignments', label: 'Assignments', icon: '📌' },
                 { k: 'manage',   label: 'Other',    icon: '⚙️' },
               ].map(({ k, label, icon }) => (
                 <button
@@ -589,22 +634,38 @@ export default function TeacherDashboard() {
             {/* Filter bar (no view toggle) */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 px-3 py-2.5 flex flex-wrap gap-2 items-center">
               {/* Class filter */}
-              <div className="flex bg-gray-50 rounded-lg border border-gray-200 p-1 gap-1">
-                {['All', '9', '10'].map((c) => (
-                  <button
-                    key={c}
-                    onClick={() => setClassFilter(c)}
-                    className="px-4 py-1.5 rounded-md text-sm font-medium transition"
-                    style={classFilter === c ? { background: GOLD, color: 'white' } : { color: '#6b4c1e' }}
-                  >
-                    {c === 'All' ? 'All Classes' : `Class ${c}`}
-                  </button>
-                ))}
-              </div>
-              {(view === 'students' || view === 'manage') && (
+              {view !== 'assignments' && (
+                <div className="flex bg-gray-50 rounded-lg border border-gray-200 p-1 gap-1">
+                  {['All', '9', '10'].map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => setClassFilter(c)}
+                      className="px-4 py-1.5 rounded-md text-sm font-medium transition"
+                      style={classFilter === c ? { background: GOLD, color: 'white' } : { color: '#6b4c1e' }}
+                    >
+                      {c === 'All' ? 'All Classes' : `Class ${c}`}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {view === 'assignments' && (
+                <div className="flex bg-gray-50 rounded-lg border border-gray-200 p-1 gap-1">
+                  {['9', '10'].map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => setAssignmentClass(c)}
+                      className="px-4 py-1.5 rounded-md text-sm font-medium transition"
+                      style={assignmentClass === c ? { background: GOLD, color: 'white' } : { color: '#6b4c1e' }}
+                    >
+                      {`Class ${c}`}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {(view === 'students' || view === 'manage' || view === 'assignments') && (
                 <input
                   type="text"
-                  placeholder="Search student…"
+                  placeholder={view === 'assignments' ? 'Search assignment…' : 'Search student…'}
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   className="border border-gray-200 rounded-lg px-4 py-2 text-sm focus:outline-none bg-gray-50"
@@ -645,7 +706,7 @@ export default function TeacherDashboard() {
                 </>
               )}
               <span className="text-sm text-gray-400 ml-auto">
-                {view === 'students' ? `${filtered.length} students` : view === 'tests' ? `${filteredTests.length} tests` : view === 'manage' ? `${studentList.length} students` : ''}
+                {view === 'students' ? `${filtered.length} students` : view === 'tests' ? `${filteredTests.length} tests` : view === 'manage' ? `${studentList.length} students` : view === 'assignments' ? `${filteredAssignments.length} assignments` : ''}
               </span>
             </div>
 
@@ -1140,6 +1201,95 @@ function ini(name) {
           </div>
         </div>}
 
+        {/* ── Assignments tab ── */}
+        {view === 'assignments' && (
+          <div className="space-y-4">
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+              <p className="text-sm font-semibold text-gray-700 mb-2">Send assignments from n8n</p>
+              <p className="text-xs text-gray-500 mb-2">
+                POST to this endpoint with header <code className="bg-gray-100 px-1 rounded">x-api-key</code> to add an assignment:
+              </p>
+              <pre className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs overflow-x-auto text-gray-700 whitespace-pre-wrap">
+{`POST https://cexbpkbadthoqbruyjdg.supabase.co/functions/v1/assignment-webhook
+Content-Type: application/json
+x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
+
+{
+  "class": "9",
+  "subject": "Maths",
+  "assignment_name": "Chapter 4 worksheet",
+  "deadline": "2026-08-05T18:00:00+05:30",
+  "link": "https://...",
+  "other": "Optional notes"
+}`}
+              </pre>
+            </div>
+
+            <div className="bg-white rounded-xl shadow overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs text-gray-300 uppercase tracking-wide" style={{ background: '#120600' }}>
+                      <th className="px-3 sm:px-5 py-3">Class</th>
+                      <th className="px-3 sm:px-5 py-3">Subject</th>
+                      <th className="px-3 sm:px-5 py-3">Assignment</th>
+                      <th className="px-3 sm:px-5 py-3">Deadline</th>
+                      <th className="px-3 sm:px-5 py-3">Link</th>
+                      <th className="px-3 sm:px-5 py-3 hidden md:table-cell">Notes</th>
+                      <th className="px-3 sm:px-5 py-3 hidden lg:table-cell">Created</th>
+                      <th className="px-3 sm:px-5 py-3 text-center">Status</th>
+                      <th className="px-3 sm:px-5 py-3 text-center">Remove</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {filteredAssignments.map((a) => (
+                      <tr key={a.id} className={a.completed ? 'opacity-60' : ''}>
+                        <td className="px-3 sm:px-5 py-3">
+                          <span className="px-2 py-0.5 rounded-full text-xs font-bold text-white" style={{ background: GOLD }}>{a.class}</span>
+                        </td>
+                        <td className="px-3 sm:px-5 py-3 text-gray-600">{a.subject}</td>
+                        <td className="px-3 sm:px-5 py-3 font-medium text-gray-800">{a.title}</td>
+                        <td className="px-3 sm:px-5 py-3 whitespace-nowrap text-gray-700">{formatIST(a.deadline)}</td>
+                        <td className="px-3 sm:px-5 py-3">
+                          {a.link
+                            ? <a href={a.link} target="_blank" rel="noreferrer" className="text-xs font-medium" style={{ color: GOLD }}>Open ↗</a>
+                            : <span className="text-gray-300 text-xs">—</span>}
+                        </td>
+                        <td className="px-3 sm:px-5 py-3 text-gray-500 text-xs hidden md:table-cell">{a.notes || '—'}</td>
+                        <td className="px-3 sm:px-5 py-3 text-gray-400 text-xs whitespace-nowrap hidden lg:table-cell">{formatIST(a.created_at)}</td>
+                        <td className="px-3 sm:px-5 py-3 text-center">
+                          <button
+                            onClick={() => toggleAssignmentCompleted(a)}
+                            className="text-xs font-semibold px-2.5 py-1 rounded-full transition"
+                            style={a.completed
+                              ? { background: 'rgba(34,197,94,0.12)', color: '#16a34a' }
+                              : { background: 'rgba(200,134,10,0.12)', color: GOLD }
+                            }
+                          >
+                            {a.completed ? '✓ Completed' : 'Mark Completed'}
+                          </button>
+                        </td>
+                        <td className="px-3 sm:px-5 py-3 text-center">
+                          <button
+                            onClick={() => { if (window.confirm(`Remove "${a.title}"?`)) deleteAssignment(a.id) }}
+                            disabled={deletingAssignmentId === a.id}
+                            className="text-xs font-medium text-red-500 hover:text-red-600 transition disabled:opacity-50"
+                          >
+                            {deletingAssignmentId === a.id ? 'Removing…' : 'Remove'}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {filteredAssignments.length === 0 && (
+                  <p className="text-center text-gray-400 py-10">No assignments yet.</p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ── Manage / Other tab ── */}
         {view === 'manage' && (
           <div className="space-y-4">
@@ -1490,6 +1640,7 @@ function ini(name) {
       {confirmDeleteStudent && (
         <ConfirmDeleteStudentModal
           student={confirmDeleteStudent}
+          teacherEmail={session?.email}
           onCancel={() => setConfirmDeleteStudent(null)}
           onConfirm={() => deleteStudent(confirmDeleteStudent.student_id)}
         />
@@ -1627,10 +1778,62 @@ function EditTestModal({ test, saving, onCancel, onSave }) {
   )
 }
 
-function ConfirmDeleteStudentModal({ student, onCancel, onConfirm }) {
+const DELETE_OTP_PURPOSE = 'delete-student'
+const OTP_RESEND_COOLDOWN = 45 // seconds, must match send-action-otp's cooldown
+
+function ConfirmDeleteStudentModal({ student, teacherEmail, onCancel, onConfirm }) {
   const PHRASE = 'delete this user'
   const [text, setText] = useState('')
+  const [step, setStep] = useState('confirm') // confirm | otp
+  const [code, setCode] = useState('')
+  const [sending, setSending] = useState(false)
+  const [verifying, setVerifying] = useState(false)
+  const [error, setError] = useState('')
+  const [cooldown, setCooldown] = useState(0)
+  const cooldownRef = useRef(null)
   const matches = text.trim().toLowerCase() === PHRASE
+
+  useEffect(() => () => clearInterval(cooldownRef.current), [])
+
+  function startCooldown() {
+    setCooldown(OTP_RESEND_COOLDOWN)
+    clearInterval(cooldownRef.current)
+    cooldownRef.current = setInterval(() => {
+      setCooldown((c) => {
+        if (c <= 1) { clearInterval(cooldownRef.current); return 0 }
+        return c - 1
+      })
+    }, 1000)
+  }
+
+  async function sendCode() {
+    setError('')
+    setSending(true)
+    const { data, error: fnErr } = await supabase.functions.invoke('send-action-otp', {
+      body: { purpose: DELETE_OTP_PURPOSE },
+    })
+    setSending(false)
+    if (fnErr || data?.ok === false) {
+      setError(data?.error || 'Could not send code. Please try again.')
+      return
+    }
+    startCooldown()
+    setStep('otp')
+  }
+
+  async function verifyAndConfirm() {
+    setError('')
+    setVerifying(true)
+    const { data, error: fnErr } = await supabase.functions.invoke('verify-action-otp', {
+      body: { code: code.trim(), purpose: DELETE_OTP_PURPOSE },
+    })
+    setVerifying(false)
+    if (fnErr || data?.ok === false) {
+      setError(data?.error || 'Invalid or expired code.')
+      return
+    }
+    onConfirm()
+  }
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onCancel}>
@@ -1642,33 +1845,85 @@ function ConfirmDeleteStudentModal({ student, onCancel, onConfirm }) {
         <p className="text-sm text-gray-500 mb-4">
           This permanently deletes this student's login email(s) and all of their score reports from Supabase. This cannot be undone.
         </p>
-        <p className="text-xs text-gray-500 mb-2">
-          Type <span className="font-mono font-semibold text-gray-700">{PHRASE}</span> to confirm:
-        </p>
-        <input
-          autoFocus
-          type="text"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && matches) onConfirm() }}
-          placeholder={PHRASE}
-          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-red-200"
-        />
-        <div className="flex gap-2 justify-end">
-          <button
-            onClick={onCancel}
-            className="text-sm font-medium px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100 transition"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={onConfirm}
-            disabled={!matches}
-            className="text-sm font-semibold px-4 py-2 rounded-lg text-white bg-red-500 hover:bg-red-600 transition disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            Delete Student
-          </button>
-        </div>
+
+        {step === 'confirm' ? (
+          <>
+            <p className="text-xs text-gray-500 mb-2">
+              Type <span className="font-mono font-semibold text-gray-700">{PHRASE}</span> to confirm:
+            </p>
+            <input
+              autoFocus
+              type="text"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && matches) sendCode() }}
+              placeholder={PHRASE}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-red-200"
+            />
+            {error && (
+              <div className="rounded-lg px-3 py-2 text-xs mb-4 bg-red-50 border border-red-200 text-red-600">{error}</div>
+            )}
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={onCancel}
+                className="text-sm font-medium px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={sendCode}
+                disabled={!matches || sending}
+                className="text-sm font-semibold px-4 py-2 rounded-lg text-white bg-red-500 hover:bg-red-600 transition disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {sending ? 'Sending code…' : 'Send Confirmation Code'}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="text-xs text-gray-500 mb-2">
+              Enter the 6-digit code sent to <span className="font-medium text-gray-700">{teacherEmail}</span> to permanently delete this student:
+            </p>
+            <input
+              autoFocus
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]{6}"
+              maxLength={6}
+              value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+              onKeyDown={(e) => { if (e.key === 'Enter' && code.length === 6) verifyAndConfirm() }}
+              placeholder="123456"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-2 tracking-[0.3em] text-center focus:outline-none focus:ring-2 focus:ring-red-200"
+            />
+            <button
+              type="button"
+              disabled={cooldown > 0 || sending}
+              onClick={sendCode}
+              className="text-xs font-medium mb-4 disabled:text-gray-400 text-red-600"
+            >
+              {cooldown > 0 ? `Resend code in ${cooldown}s` : 'Resend code'}
+            </button>
+            {error && (
+              <div className="rounded-lg px-3 py-2 text-xs mb-4 bg-red-50 border border-red-200 text-red-600">{error}</div>
+            )}
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={onCancel}
+                className="text-sm font-medium px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={verifyAndConfirm}
+                disabled={code.length !== 6 || verifying}
+                className="text-sm font-semibold px-4 py-2 rounded-lg text-white bg-red-500 hover:bg-red-600 transition disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {verifying ? 'Verifying…' : 'Delete Student'}
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   )
