@@ -16,7 +16,9 @@ function TeacherRoute({ children }) {
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
-      setStatus(session ? 'ok' : 'denied')
+      // app_metadata is admin/service-role-only — unlike user_metadata or the
+      // localStorage session, a logged-in student can't forge this claim.
+      setStatus(session?.user?.app_metadata?.role === 'teacher' ? 'ok' : 'denied')
     })
   }, [])
 

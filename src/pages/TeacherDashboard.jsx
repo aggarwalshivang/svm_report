@@ -82,7 +82,7 @@ export default function TeacherDashboard() {
 
   // Manage tab state
   const [manageMode, setManageMode] = useState('list') // 'list' | 'add'
-  const [newStudent, setNewStudent] = useState({ name: '', class: '9', sourceId: '', emails: [''] })
+  const [newStudent, setNewStudent] = useState({ name: '', class: '9', sourceId: '', phone: '', emails: [''] })
   const [savingStudent, setSavingStudent] = useState(false)
   const [deletingStudentId, setDeletingStudentId] = useState(null)
   const [confirmDeleteStudent, setConfirmDeleteStudent] = useState(null)
@@ -96,6 +96,9 @@ export default function TeacherDashboard() {
   const [editingSourceIdRow, setEditingSourceIdRow] = useState(null)
   const [editingSourceIdValue, setEditingSourceIdValue] = useState('')
   const [savingSourceId, setSavingSourceId] = useState(false)
+  const [editingPhoneStudentId, setEditingPhoneStudentId] = useState(null)
+  const [editingPhoneValue, setEditingPhoneValue] = useState('')
+  const [savingPhone, setSavingPhone] = useState(false)
   const [creatingLoginId, setCreatingLoginId] = useState(null)
 
   // Assignments tab state
@@ -307,7 +310,7 @@ export default function TeacherDashboard() {
   const studentList = useMemo(() => {
     const map = {}
     students.forEach((row) => {
-      if (!map[row.student_id]) map[row.student_id] = { student_id: row.student_id, student_name: row.student_name, class: row.class, emails: [] }
+      if (!map[row.student_id]) map[row.student_id] = { student_id: row.student_id, student_name: row.student_name, class: row.class, phone: row.phone ?? null, emails: [] }
       if (row.email) map[row.student_id].emails.push({ id: row.id, email: row.email, source_id: row.source_id ?? null, login_created: !!row.login_created })
     })
     return Object.values(map).sort((a, b) => Number(a.class) - Number(b.class) || a.student_name.localeCompare(b.student_name))
@@ -405,12 +408,14 @@ export default function TeacherDashboard() {
     const maxId = students.length ? Math.max(...students.map((s) => Number(s.student_id))) : 0
     const newId = maxId + 1
     const reportStartDate = new Date().toISOString().slice(0, 10)
+    const phone = newStudent.phone.trim() || null
     const rows = validEmails.map((email) => ({
       student_id: newId,
       student_name: newStudent.name.trim(),
       class: Number(newStudent.class),
       email: email.trim().toLowerCase(),
       source_id: sourceId,
+      phone,
       report_start_date: reportStartDate,
     }))
     const { data, error } = await supabase.from('student_emails').insert(rows).select()
@@ -420,7 +425,7 @@ export default function TeacherDashboard() {
       alert("Add was blocked by Supabase (likely a Row Level Security policy) — the student was not added.")
     } else {
       setStudents((prev) => [...prev, ...data])
-      setNewStudent({ name: '', class: '9', sourceId: '', emails: [''] })
+      setNewStudent({ name: '', class: '9', sourceId: '', phone: '', emails: [''] })
       setManageMode('list')
     }
     setSavingStudent(false)
@@ -508,6 +513,7 @@ export default function TeacherDashboard() {
       student_name: student.student_name,
       class: student.class,
       email,
+      phone: student.phone ?? null,
     }]).select()
     if (error) {
       alert(`Failed to add email: ${error.message}`)
@@ -576,6 +582,23 @@ export default function TeacherDashboard() {
       setEditingSourceIdValue('')
     }
     setSavingSourceId(false)
+  }
+
+  async function updatePhone(student) {
+    const phone = editingPhoneValue.trim() || null
+    setSavingPhone(true)
+    const { data, error } = await supabase
+      .from('student_emails').update({ phone }).eq('student_id', student.student_id).select('id')
+    if (error) {
+      alert(`Failed to update phone number: ${error.message}`)
+    } else if (!data || data.length === 0) {
+      alert("Update was blocked by Supabase (likely a Row Level Security policy) — the phone number was not changed.")
+    } else {
+      setStudents((prev) => prev.map((s) => (s.student_id === student.student_id ? { ...s, phone } : s)))
+      setEditingPhoneStudentId(null)
+      setEditingPhoneValue('')
+    }
+    setSavingPhone(false)
   }
 
   async function removeEmail(emailRow) {
@@ -1507,6 +1530,52 @@ x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
 
                         {isExpanded && (
                           <div className="px-5 pb-4 pt-2 border-t border-amber-100" style={{ background: 'rgba(200,134,10,0.06)' }}>
+                            <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-2">Phone Number</p>
+                            <div className="bg-white rounded-lg px-3 py-2 border border-gray-100 flex items-center justify-between gap-2 mb-3">
+                              {editingPhoneStudentId === s.student_id ? (
+                                <>
+                                  <input
+                                    type="tel"
+                                    autoFocus
+                                    placeholder="Phone number"
+                                    value={editingPhoneValue}
+                                    onChange={(e) => setEditingPhoneValue(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') updatePhone(s)
+                                      if (e.key === 'Escape') { setEditingPhoneStudentId(null); setEditingPhoneValue('') }
+                                    }}
+                                    className="flex-1 border border-gray-200 rounded-lg px-2 py-1 text-sm focus:outline-none bg-white"
+                                    onFocus={(e) => e.target.style.boxShadow = `0 0 0 2px ${GOLD}40`}
+                                    onBlur={(e) => e.target.style.boxShadow = ''}
+                                  />
+                                  <button
+                                    onClick={() => updatePhone(s)}
+                                    disabled={savingPhone}
+                                    className="text-xs font-semibold flex-shrink-0 disabled:opacity-50"
+                                    style={{ color: GOLD }}
+                                  >
+                                    {savingPhone ? '…' : 'Save'}
+                                  </button>
+                                  <button
+                                    onClick={() => { setEditingPhoneStudentId(null); setEditingPhoneValue('') }}
+                                    className="text-xs text-gray-400 hover:text-gray-600 font-semibold flex-shrink-0"
+                                  >
+                                    Cancel
+                                  </button>
+                                </>
+                              ) : (
+                                <>
+                                  <span className="text-sm text-gray-700 flex-1">{s.phone || '—'}</span>
+                                  <button
+                                    onClick={() => { setEditingPhoneStudentId(s.student_id); setEditingPhoneValue(s.phone || '') }}
+                                    className="text-xs font-semibold hover:underline flex-shrink-0"
+                                    style={{ color: GOLD }}
+                                  >
+                                    Edit
+                                  </button>
+                                </>
+                              )}
+                            </div>
                             <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-2">Linked Emails</p>
                             <div className="space-y-1.5 mb-3">
                               {s.emails.map((emailRow) => (
@@ -1707,6 +1776,19 @@ x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
                       onBlur={(e) => e.target.style.boxShadow = ''}
                     />
                   </div>
+                  {/* Phone */}
+                  <div>
+                    <label className="block text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-1.5">Phone Number</label>
+                    <input
+                      type="tel"
+                      placeholder="Phone number"
+                      value={newStudent.phone}
+                      onChange={(e) => setNewStudent((p) => ({ ...p, phone: e.target.value }))}
+                      className="w-full border border-gray-200 rounded-lg px-4 py-2.5 text-sm focus:outline-none"
+                      onFocus={(e) => e.target.style.boxShadow = `0 0 0 2px ${GOLD}40`}
+                      onBlur={(e) => e.target.style.boxShadow = ''}
+                    />
+                  </div>
                   {/* Emails */}
                   <div>
                     <label className="block text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-1.5">Email Addresses</label>
@@ -1753,7 +1835,7 @@ x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
                       {savingStudent ? 'Saving…' : 'Add Student'}
                     </button>
                     <button
-                      onClick={() => { setManageMode('list'); setNewStudent({ name: '', class: '9', sourceId: '', emails: [''] }) }}
+                      onClick={() => { setManageMode('list'); setNewStudent({ name: '', class: '9', sourceId: '', phone: '', emails: [''] }) }}
                       className="px-6 py-2.5 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100 transition"
                     >
                       Cancel

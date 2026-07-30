@@ -63,7 +63,10 @@ Deno.serve(async (req) => {
       email: normalizedEmail,
       password: randomPassword(), // unknown to everyone — the student sets their own via the emailed code
       email_confirm: true,
-      user_metadata: { role: 'student', student_id, student_name },
+      // app_metadata (not user_metadata) — only the service role can set it, so a
+      // student can't self-elevate by editing their own metadata from the browser.
+      // RLS policies on student_emails/student_scores/assignments key off this claim.
+      app_metadata: { role: 'student', student_id, student_name },
     })
 
     if (createErr) {

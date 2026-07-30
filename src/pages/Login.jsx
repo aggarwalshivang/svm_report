@@ -286,7 +286,7 @@ export default function Login() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder={role === 'student' ? 'your@gmail.com' : 'admin@saraswatividyamandir.com'}
+                placeholder={role === 'student' ? 'your@gmail.com' : 'Teacher email'}
                 className="w-full px-4 py-3 rounded-lg focus:outline-none"
                 style={inputStyle}
                 onFocus={(e) => e.target.style.boxShadow = '0 0 0 2px #c8860a40'}
@@ -326,7 +326,7 @@ export default function Login() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder={role === 'student' ? 'your@gmail.com' : 'admin@saraswatividyamandir.com'}
+                placeholder={role === 'student' ? 'your@gmail.com' : 'Teacher email'}
                 className="w-full px-4 py-3 rounded-lg focus:outline-none"
                 style={inputStyle}
                 onFocus={(e) => e.target.style.boxShadow = '0 0 0 2px #c8860a40'}
