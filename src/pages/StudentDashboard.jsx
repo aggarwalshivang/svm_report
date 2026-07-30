@@ -319,7 +319,7 @@ export default function StudentDashboard() {
         <div className="flex gap-2">
           {[
             { key: 'report',      label: '📊 My Report' },
-            { key: 'assignments', label: `📌 Assignments${assignments.length ? ` (${assignments.length})` : ''}${missingCount ? ` · ${missingCount} missing` : ''}` },
+            { key: 'assignments', label: `📌 Worksheets${assignments.length ? ` (${assignments.length})` : ''}${missingCount ? ` · ${missingCount} missing` : ''}` },
           ].map(({ key, label }) => (
             <button
               key={key}
@@ -641,7 +641,7 @@ export default function StudentDashboard() {
             </div>
             {displayedAssignments.length === 0 && (
               <p className="text-center text-gray-400 py-10 text-sm bg-white rounded-xl shadow-sm border border-gray-100">
-                {assignments.length === 0 ? 'No assignments yet.' : 'Nothing matches this filter.'}
+                {assignments.length === 0 ? 'No worksheets yet.' : 'Nothing matches this filter.'}
               </p>
             )}
           </div>
@@ -803,7 +803,7 @@ function AssignmentCard({ a, session, onSubmitted }) {
       )}
 
       {a.status.key === 'closed' && !a.submission && (
-        <p className="text-xs text-gray-400 border-t border-gray-100 pt-3">Your teacher has closed submissions for this assignment.</p>
+        <p className="text-xs text-gray-400 border-t border-gray-100 pt-3">Your teacher has closed submissions for this worksheet.</p>
       )}
 
       {canTurnIn && (

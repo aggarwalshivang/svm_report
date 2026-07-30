@@ -9,6 +9,37 @@ import { supabase } from '../lib/supabase'
 const GOLD = '#c8860a'
 const NAV  = '#2d1200'
 const DARK = '#1a0800'
+
+// Placeholders available to the teacher when customizing the top-scorer message format.
+const MESSAGE_FORMAT_PLACEHOLDERS = [
+  { key: 'testNo', label: 'Test number' },
+  { key: 'date', label: 'Test date' },
+  { key: 'subject', label: 'Subject' },
+  { key: 'topic', label: 'Chapter / topic' },
+  { key: 'class', label: 'Class' },
+  { key: 'totalMarks', label: 'Total marks' },
+  { key: 'thresholdLabel', label: 'Threshold shown (e.g. ≥70%)' },
+  { key: 'list', label: 'Ranked list of top scorers' },
+]
+const DEFAULT_MESSAGE_FORMAT = `✅ *Practice Test #{testNo} Scores – {date}*
+
+The scores have been sent individually to parents via personal *WhatsApp*.
+
+🏆 *Only the Top Scorers are shared in the group.*
+
+📚 *{subject} - {topic}*
+📊 *Total Marks:* {totalMarks}
+
+*Top Performers ({thresholdLabel}):*
+
+{list}
+
+📞 *For any queries, please contact 999-266-1556.*
+
+🙏 Thank you for your support!
+
+*Saraswati Vidyamandir*`
+const MESSAGE_FORMAT_STORAGE_KEY = 'svm_message_format'
 // Creates the student's login and emails them a code to set their own
 // password, via a Supabase Edge Function — it needs the service-role key,
 // which must never live in browser code.
@@ -52,8 +83,15 @@ export default function TeacherDashboard() {
   const [sending, setSending] = useState(null)
   const [sendResult, setSendResult] = useState(null)
   const [previewTest, setPreviewTest] = useState(null)
+  const [previewMessage, setPreviewMessage] = useState('')
+  const [messageFormat, setMessageFormat] = useState(() => {
+    try { return localStorage.getItem(MESSAGE_FORMAT_STORAGE_KEY) || DEFAULT_MESSAGE_FORMAT } catch { return DEFAULT_MESSAGE_FORMAT }
+  })
+  const [formatModalOpen, setFormatModalOpen] = useState(false)
   const [editingTest, setEditingTest] = useState(null)
   const [savingTestEdit, setSavingTestEdit] = useState(false)
+  const [deletingTest, setDeletingTest] = useState(null)
+  const [deletingTestKey, setDeletingTestKey] = useState(null)
   const [sentReports, setSentReports] = useState(() => {
     try { return JSON.parse(localStorage.getItem('svm_sent_reports') || '{}') } catch { return {} }
   })
@@ -316,7 +354,11 @@ export default function TeacherDashboard() {
     return Object.values(map).sort((a, b) => Number(a.class) - Number(b.class) || a.student_name.localeCompare(b.student_name))
   }, [students])
 
-  function generateMessage(test) {
+  function applyMessageFormat(template, values) {
+    return template.replace(/\{(\w+)\}/g, (m, key) => (key in values ? String(values[key]) : m))
+  }
+
+  function generateMessage(test, format = messageFormat) {
     const d = new Date(test.date + 'T00:00:00')
     const dateStr = d.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })
     let topScorers = test.scores
@@ -332,17 +374,37 @@ export default function TeacherDashboard() {
     const list = ranked.length
       ? ranked.map((s) => `${s.rank}. ${s.student_name} - ${s.score_obtained}/${test.total_marks}`).join('\n')
       : `_(No students scored ${thresholdLabel})_`
-    return `✅ *Practice Test #${test.testNo} Scores – ${dateStr}*\n\nThe scores have been sent individually to parents via personal *WhatsApp*.\n\n🏆 *Only the Top Scorers are shared in the group.*\n\n📚 *${test.subject} - ${test.topic}*\n📊 *Total Marks:* ${test.total_marks}\n\n*Top Performers (${thresholdLabel}):*\n\n${list}\n\n📞 *For any queries, please contact 999-266-1556.*\n\n🙏 Thank you for your support!\n\n*Saraswati Vidyamandir*`
+    return applyMessageFormat(format, {
+      testNo: test.testNo,
+      date: dateStr,
+      subject: test.subject,
+      topic: test.topic,
+      class: test.class,
+      totalMarks: test.total_marks,
+      thresholdLabel,
+      list,
+    })
   }
 
-  async function sendReport(test) {
+  function openPreview(test) {
+    setPreviewMessage(generateMessage(test))
+    setPreviewTest(test)
+  }
+
+  function saveMessageFormat(next) {
+    setMessageFormat(next)
+    try { localStorage.setItem(MESSAGE_FORMAT_STORAGE_KEY, next) } catch { /* ignore */ }
+    setFormatModalOpen(false)
+  }
+
+  async function sendReport(test, message) {
     setSending(test.key)
     setSendResult(null)
     try {
       const res = await fetch('https://n8n.saraswatividyamandir.com/webhook/svm-top-scorer-report', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: generateMessage(test), class: String(test.class) }),
+        body: JSON.stringify({ message, class: String(test.class) }),
       })
       if (res.ok) {
         const updated = { ...sentReports, [test.key]: new Date().toISOString() }
@@ -358,45 +420,62 @@ export default function TeacherDashboard() {
 
   async function saveTestEdit(test, newTotalMarks, minPercent) {
     setSavingTestEdit(true)
-    const ids = test.scores.map((s) => s.id)
+    const oldTotalMarks = test.total_marks
 
-    const { error: totalErr } = await supabase
-      .from('student_scores')
-      .update({ total_marks: newTotalMarks })
-      .in('id', ids)
-    if (totalErr) {
-      alert(`Failed to update total marks: ${totalErr.message}`)
+    // Rescale each student's obtained score proportionally so their percentage stays the same
+    // (e.g. 32/40 = 80% becomes 24/30 = 80% when the total is changed to 30).
+    const rescaled = test.scores.map((s) => ({
+      id: s.id,
+      score_obtained: s.is_absent
+        ? s.score_obtained
+        : Math.max(0, Math.min(newTotalMarks, Math.round((s.score_obtained / oldTotalMarks) * newTotalMarks))),
+    }))
+
+    // Floor: anyone below this % of the new total marks gets bumped up to it.
+    const floor = minPercent > 0 ? Math.round((minPercent / 100) * newTotalMarks) : 0
+    const isAbsent = new Map(test.scores.map((s) => [s.id, s.is_absent]))
+    const finalScores = rescaled.map((s) => ({
+      id: s.id,
+      score_obtained: (!isAbsent.get(s.id) && s.score_obtained < floor) ? floor : s.score_obtained,
+    }))
+
+    const results = await Promise.all(finalScores.map((s) =>
+      supabase
+        .from('student_scores')
+        .update({ total_marks: newTotalMarks, score_obtained: s.score_obtained })
+        .eq('id', s.id)
+    ))
+    const failed = results.find((r) => r.error)
+    if (failed) {
+      alert(`Failed to update scores: ${failed.error.message}`)
       setSavingTestEdit(false)
       return
     }
 
-    // Floor: anyone below this % of the (possibly new) total marks gets bumped up to it.
-    const floor = minPercent > 0 ? Math.round((minPercent / 100) * newTotalMarks) : 0
-    const boostIds = test.scores
-      .filter((s) => !s.is_absent && s.score_obtained < floor)
-      .map((s) => s.id)
-
-    if (boostIds.length) {
-      const { error: boostErr } = await supabase
-        .from('student_scores')
-        .update({ score_obtained: floor })
-        .in('id', boostIds)
-      if (boostErr) {
-        alert(`Total marks updated, but failed to apply the minimum score floor: ${boostErr.message}`)
-        setSavingTestEdit(false)
-        return
-      }
-    }
-
-    const idSet = new Set(ids)
-    const boostSet = new Set(boostIds)
+    const scoreMap = new Map(finalScores.map((s) => [s.id, s.score_obtained]))
     setAllScores((prev) => prev.map((r) => (
-      idSet.has(r.id)
-        ? { ...r, total_marks: newTotalMarks, score_obtained: boostSet.has(r.id) ? floor : r.score_obtained }
+      scoreMap.has(r.id)
+        ? { ...r, total_marks: newTotalMarks, score_obtained: scoreMap.get(r.id) }
         : r
     )))
     setSavingTestEdit(false)
     setEditingTest(null)
+  }
+
+  async function deleteTest(test) {
+    setDeletingTest(null)
+    setDeletingTestKey(test.key)
+    const ids = test.scores.map((s) => s.id)
+    const { data, error } = await supabase.from('student_scores').delete().in('id', ids).select('id')
+    if (error) {
+      alert(`Failed to delete test: ${error.message}`)
+    } else if (!data || data.length === 0) {
+      alert('Delete was blocked by Supabase (likely a Row Level Security policy) — the test was not removed.')
+    } else {
+      const idSet = new Set(ids)
+      setAllScores((prev) => prev.filter((r) => !idSet.has(r.id)))
+    }
+    setDeletingTestKey(null)
   }
 
   async function addStudent() {
@@ -476,7 +555,7 @@ export default function TeacherDashboard() {
     const { data, error } = await supabase.from('assignments').update({ completed }).eq('id', assignment.id).select('id')
     if (error || !data || data.length === 0) {
       setAssignments((prev) => prev.map((a) => (a.id === assignment.id ? { ...a, completed: !completed } : a)))
-      alert(`Failed to update assignment: ${error?.message || 'blocked by Supabase (RLS)'}`)
+      alert(`Failed to update worksheet: ${error?.message || 'blocked by Supabase (RLS)'}`)
     }
   }
 
@@ -486,7 +565,7 @@ export default function TeacherDashboard() {
     const { data, error } = await supabase.from('assignments').update({ submissions_closed }).eq('id', assignment.id).select('id')
     if (error || !data || data.length === 0) {
       setAssignments((prev) => prev.map((a) => (a.id === assignment.id ? { ...a, submissions_closed: !submissions_closed } : a)))
-      alert(`Failed to update assignment: ${error?.message || 'blocked by Supabase (RLS)'}`)
+      alert(`Failed to update worksheet: ${error?.message || 'blocked by Supabase (RLS)'}`)
     }
   }
 
@@ -495,9 +574,9 @@ export default function TeacherDashboard() {
     setDeletingAssignmentId(id)
     const { data, error } = await supabase.from('assignments').delete().eq('id', id).select('id')
     if (error) {
-      alert(`Failed to delete assignment: ${error.message}`)
+      alert(`Failed to delete worksheet: ${error.message}`)
     } else if (!data || data.length === 0) {
-      alert("Delete was blocked by Supabase (likely a Row Level Security policy) — the assignment was not removed.")
+      alert("Delete was blocked by Supabase (likely a Row Level Security policy) — the worksheet was not removed.")
     } else {
       setAssignments((prev) => prev.filter((a) => a.id !== id))
     }
@@ -678,7 +757,7 @@ export default function TeacherDashboard() {
                 { k: 'analysis', label: 'Analysis', icon: '📊' },
                 { k: 'tests',    label: 'Tests',    icon: '📋' },
                 { k: 'toppers',  label: 'Toppers',  icon: '🏆' },
-                { k: 'assignments', label: 'Assignments', icon: '📌' },
+                { k: 'assignments', label: 'Worksheets', icon: '📌' },
                 { k: 'manage',   label: 'Other',    icon: '⚙️' },
               ].map(({ k, label, icon }) => (
                 <button
@@ -734,7 +813,7 @@ export default function TeacherDashboard() {
               {(view === 'students' || view === 'manage' || view === 'assignments') && (
                 <input
                   type="text"
-                  placeholder={view === 'assignments' ? 'Search assignment…' : 'Search student…'}
+                  placeholder={view === 'assignments' ? 'Search worksheet…' : 'Search student…'}
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   className="border border-gray-200 rounded-lg px-4 py-2 text-sm focus:outline-none bg-gray-50"
@@ -772,10 +851,17 @@ export default function TeacherDashboard() {
                       ))}
                     </div>
                   </div>
+                  <button
+                    onClick={() => setFormatModalOpen(true)}
+                    className="text-xs font-semibold px-3 py-2 rounded-lg border transition"
+                    style={{ color: GOLD, borderColor: GOLD }}
+                  >
+                    🎨 Format
+                  </button>
                 </>
               )}
               <span className="text-sm text-gray-400 ml-auto">
-                {view === 'students' ? `${filtered.length} students` : view === 'tests' ? `${filteredTests.length} tests` : view === 'manage' ? `${studentList.length} students` : view === 'assignments' ? `${filteredAssignments.length} assignments` : ''}
+                {view === 'students' ? `${filtered.length} students` : view === 'tests' ? `${filteredTests.length} tests` : view === 'manage' ? `${studentList.length} students` : view === 'assignments' ? `${filteredAssignments.length} worksheets` : ''}
               </span>
             </div>
 
@@ -1089,6 +1175,7 @@ function ini(name) {
                           Top {topPctFilter === '0' ? '' : `≥${topPctFilter}%`}{topNFilter !== 'any' ? ` (≤${topNFilter})` : ''}
                         </TH>
                         <th className="px-4 py-3 text-center whitespace-nowrap">Edit</th>
+                        <th className="px-4 py-3 text-center whitespace-nowrap">Delete</th>
                         <th className="px-4 py-3 text-center whitespace-nowrap">Send</th>
                       </tr>
                     )
@@ -1125,22 +1212,31 @@ function ini(name) {
                           </button>
                         </td>
                         <td className="px-4 py-3 text-center">
+                          <button
+                            onClick={() => setDeletingTest(t)}
+                            disabled={deletingTestKey === t.key}
+                            className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-red-300 text-red-500 hover:bg-red-50 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            {deletingTestKey === t.key ? '…' : '🗑️ Delete'}
+                          </button>
+                        </td>
+                        <td className="px-4 py-3 text-center">
                           {isSending ? (
                             <span className="text-xs text-amber-600 font-medium">Sending…</span>
                           ) : result && !result.success ? (
                             <div className="flex flex-col items-center gap-1">
                               <span className="text-xs text-red-500 font-medium">✗ Failed</span>
-                              <button onClick={() => setPreviewTest(t)} className="text-xs font-medium" style={{ color: GOLD }}>Retry</button>
+                              <button onClick={() => openPreview(t)} className="text-xs font-medium" style={{ color: GOLD }}>Retry</button>
                             </div>
                           ) : sentReports[t.key] ? (
                             <div className="flex flex-col items-center gap-1">
                               <span className="text-xs text-green-600 font-semibold">✓ Sent</span>
                               <span className="text-[10px] text-gray-400">{new Date(sentReports[t.key]).toLocaleDateString('en-US', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
-                              <button onClick={() => setPreviewTest(t)} className="text-[10px] font-medium px-2 py-0.5 rounded border" style={{ color: GOLD, borderColor: GOLD }}>↺ Re-send</button>
+                              <button onClick={() => openPreview(t)} className="text-[10px] font-medium px-2 py-0.5 rounded border" style={{ color: GOLD, borderColor: GOLD }}>↺ Re-send</button>
                             </div>
                           ) : (
                             <button
-                              onClick={() => setPreviewTest(t)}
+                              onClick={() => openPreview(t)}
                               className="text-xs font-semibold px-3 py-1.5 rounded-lg text-white transition"
                               style={{ background: GOLD }}
                             >
@@ -1280,19 +1376,19 @@ function ini(name) {
               className="inline-flex items-center gap-2 text-sm font-semibold px-4 py-2.5 rounded-lg text-white transition"
               style={{ background: GOLD }}
             >
-              📤 Upload Assignment / Worksheet ↗
+              📤 Upload Worksheet ↗
             </a>
 
-            {/* ── Assignment Analysis ── */}
+            {/* ── Worksheet Analysis ── */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-              <p className="text-sm font-semibold text-gray-700 mb-3">📊 Assignment Analysis</p>
+              <p className="text-sm font-semibold text-gray-700 mb-3">📊 Worksheet Analysis</p>
 
               <div className="grid grid-cols-2 gap-3 mb-4">
                 {assignmentAnalysis.perClass.map((c) => (
                   <div key={c.class} className="rounded-lg border border-gray-100 p-3">
                     <p className="text-xs text-gray-400 uppercase tracking-wide font-semibold mb-1">Class {c.class}</p>
                     <p className="text-2xl font-bold text-gray-800">{c.avgRate}%</p>
-                    <p className="text-xs text-gray-500 mt-0.5">{c.assignmentCount} assignment{c.assignmentCount === 1 ? '' : 's'} · {c.rosterSize} students</p>
+                    <p className="text-xs text-gray-500 mt-0.5">{c.assignmentCount} worksheet{c.assignmentCount === 1 ? '' : 's'} · {c.rosterSize} students</p>
                     <div className="w-full bg-gray-100 rounded-full h-1.5 mt-2">
                       <div className="h-1.5 rounded-full transition-all" style={{
                         width: `${c.avgRate}%`,
@@ -1304,7 +1400,7 @@ function ini(name) {
               </div>
 
               {assignmentAnalysis.perAssignment.length === 0 && (
-                <p className="text-center text-gray-400 py-6 text-sm">No assignments yet.</p>
+                <p className="text-center text-gray-400 py-6 text-sm">No worksheets yet.</p>
               )}
               <div className="divide-y divide-gray-50">
                 {assignmentAnalysis.perAssignment.map((p) => {
@@ -1349,9 +1445,9 @@ function ini(name) {
             </div>
 
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-              <p className="text-sm font-semibold text-gray-700 mb-2">Send assignments from n8n</p>
+              <p className="text-sm font-semibold text-gray-700 mb-2">Send worksheets from n8n</p>
               <p className="text-xs text-gray-500 mb-2">
-                POST to this endpoint with header <code className="bg-gray-100 px-1 rounded">x-api-key</code> to add an assignment:
+                POST to this endpoint with header <code className="bg-gray-100 px-1 rounded">x-api-key</code> to add a worksheet:
               </p>
               <pre className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs overflow-x-auto text-gray-700 whitespace-pre-wrap">
 {`POST https://cexbpkbadthoqbruyjdg.supabase.co/functions/v1/assignment-webhook
@@ -1364,13 +1460,13 @@ x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
   "assignment_name": "Chapter 4 worksheet",
   "deadline": "2026-08-05T18:00:00+05:30",
   "link": "https://drive.google.com/file/d/.../view",
-  "other": "Optional notes",
+  "other": "",
   "portion": "Chapter 4 | 10 Qs | Class 9",
   "folder": "<Google Drive folder id for submissions>"
 }`}
               </pre>
               <p className="text-[11px] text-gray-400 mt-2">
-                <code className="bg-gray-100 px-1 rounded">link</code>, <code className="bg-gray-100 px-1 rounded">portion</code> and <code className="bg-gray-100 px-1 rounded">folder</code> are only needed if students should be able to submit worksheets back for this assignment.
+                <code className="bg-gray-100 px-1 rounded">link</code>, <code className="bg-gray-100 px-1 rounded">portion</code> and <code className="bg-gray-100 px-1 rounded">folder</code> are only needed if students should be able to turn this worksheet in.
               </p>
             </div>
 
@@ -1379,7 +1475,7 @@ x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
                 <table className="w-full text-sm table-fixed">
                   <thead>
                     <tr className="text-left text-xs text-gray-300 uppercase tracking-wide" style={{ background: '#120600' }}>
-                      <th className="px-3 sm:px-5 py-3 w-auto">Assignment</th>
+                      <th className="px-3 sm:px-5 py-3 w-auto">Worksheet</th>
                       <th className="px-3 sm:px-5 py-3 w-32">Deadline</th>
                       <th className="px-3 sm:px-5 py-3 text-center w-40">Status</th>
                       <th className="px-3 sm:px-5 py-3 text-center w-20">Remove</th>
@@ -1420,7 +1516,7 @@ x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
                             </button>
                             <button
                               onClick={() => toggleSubmissionsClosed(a)}
-                              title={a.submissions_closed ? 'Students can no longer turn in this assignment' : 'Stop accepting new submissions, even before the deadline'}
+                              title={a.submissions_closed ? 'Students can no longer turn in this worksheet' : 'Stop accepting new submissions, even before the deadline'}
                               className="text-xs font-semibold px-2.5 py-1 rounded-full transition"
                               style={a.submissions_closed
                                 ? { background: 'rgba(239,68,68,0.12)', color: '#dc2626' }
@@ -1445,7 +1541,7 @@ x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
                   </tbody>
                 </table>
                 {filteredAssignments.length === 0 && (
-                  <p className="text-center text-gray-400 py-10">No assignments yet.</p>
+                  <p className="text-center text-gray-400 py-10">No worksheets yet.</p>
                 )}
               </div>
             </div>
@@ -1879,13 +1975,22 @@ x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
       {previewTest && (
         <SendReportPreviewModal
           test={previewTest}
-          message={generateMessage(previewTest)}
+          message={previewMessage}
+          onMessageChange={setPreviewMessage}
           sending={sending === previewTest.key}
           onCancel={() => setPreviewTest(null)}
           onConfirm={async () => {
-            await sendReport(previewTest)
+            await sendReport(previewTest, previewMessage)
             setPreviewTest(null)
           }}
+        />
+      )}
+
+      {formatModalOpen && (
+        <MessageFormatModal
+          format={messageFormat}
+          onCancel={() => setFormatModalOpen(false)}
+          onSave={saveMessageFormat}
         />
       )}
 
@@ -1897,11 +2002,20 @@ x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
           onSave={(newTotalMarks, minPercent) => saveTestEdit(editingTest, newTotalMarks, minPercent)}
         />
       )}
+
+      {deletingTest && (
+        <ConfirmDeleteTestModal
+          test={deletingTest}
+          teacherEmail={session?.email}
+          onCancel={() => setDeletingTest(null)}
+          onConfirm={() => deleteTest(deletingTest)}
+        />
+      )}
     </div>
   )
 }
 
-function SendReportPreviewModal({ test, message, sending, onCancel, onConfirm }) {
+function SendReportPreviewModal({ test, message, onMessageChange, sending, onCancel, onConfirm }) {
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={sending ? undefined : onCancel}>
       <div
@@ -1910,11 +2024,15 @@ function SendReportPreviewModal({ test, message, sending, onCancel, onConfirm })
       >
         <h3 className="text-lg font-bold text-gray-800 mb-1">Preview message — Test #{test.testNo}</h3>
         <p className="text-sm text-gray-500 mb-4">
-          This is exactly what will be posted to the Class {test.class} group. Review before sending.
+          Edit as needed — exactly what's in the box below will be posted to the Class {test.class} group.
         </p>
-        <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 max-h-80 overflow-y-auto whitespace-pre-wrap text-sm text-gray-800 font-mono mb-4">
-          {message}
-        </div>
+        <textarea
+          value={message}
+          onChange={(e) => onMessageChange(e.target.value)}
+          disabled={sending}
+          rows={12}
+          className="w-full bg-gray-50 border border-gray-200 rounded-lg p-4 max-h-80 overflow-y-auto whitespace-pre-wrap text-sm text-gray-800 font-mono mb-4 focus:outline-none focus:ring-2 focus:ring-amber-200 disabled:opacity-60"
+        />
         <div className="flex gap-2 justify-end">
           <button
             onClick={onCancel}
@@ -1925,12 +2043,73 @@ function SendReportPreviewModal({ test, message, sending, onCancel, onConfirm })
           </button>
           <button
             onClick={onConfirm}
-            disabled={sending}
+            disabled={sending || !message.trim()}
             className="text-sm font-semibold px-4 py-2 rounded-lg text-white transition disabled:opacity-40 disabled:cursor-not-allowed"
             style={{ background: GOLD }}
           >
             {sending ? 'Sending…' : '📤 Confirm & Send'}
           </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function MessageFormatModal({ format, onCancel, onSave }) {
+  const [text, setText] = useState(format)
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onCancel}>
+      <div
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="text-lg font-bold text-gray-800 mb-1">Message Format</h3>
+        <p className="text-sm text-gray-500 mb-3">
+          Customize the template used to generate the top-scorer message. Use these placeholders anywhere in the text:
+        </p>
+        <div className="flex flex-wrap gap-1.5 mb-3">
+          {MESSAGE_FORMAT_PLACEHOLDERS.map((p) => (
+            <span
+              key={p.key}
+              title={p.label}
+              className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200"
+              style={{ color: GOLD }}
+            >
+              {`{${p.key}}`}
+            </span>
+          ))}
+        </div>
+        <textarea
+          autoFocus
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          rows={14}
+          className="w-full border border-gray-200 rounded-lg p-4 whitespace-pre-wrap text-sm text-gray-800 font-mono mb-4 focus:outline-none focus:ring-2 focus:ring-amber-200"
+        />
+        <div className="flex gap-2 justify-between">
+          <button
+            onClick={() => setText(DEFAULT_MESSAGE_FORMAT)}
+            className="text-sm font-medium px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100 transition"
+          >
+            Reset to default
+          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={onCancel}
+              className="text-sm font-medium px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100 transition"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => onSave(text)}
+              disabled={!text.trim()}
+              className="text-sm font-semibold px-4 py-2 rounded-lg text-white transition disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{ background: GOLD }}
+            >
+              Save Format
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -1947,7 +2126,11 @@ function EditTestModal({ test, saving, onCancel, onSave }) {
   const validMin = Number.isFinite(minNum) && minNum >= 0 && minNum <= 100
   const floor = validTotal && validMin ? Math.round((minNum / 100) * totalNum) : null
   const affected = floor !== null
-    ? test.scores.filter((s) => !s.is_absent && s.score_obtained < floor).length
+    ? test.scores.filter((s) => {
+        if (s.is_absent) return false
+        const rescaled = Math.round((s.score_obtained / test.total_marks) * totalNum)
+        return rescaled < floor
+      }).length
     : 0
 
   return (
@@ -1966,8 +2149,14 @@ function EditTestModal({ test, saving, onCancel, onSave }) {
           min="1"
           value={totalMarks}
           onChange={(e) => setTotalMarks(e.target.value)}
-          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-amber-200"
+          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-1 focus:outline-none focus:ring-2 focus:ring-amber-200"
         />
+        {validTotal && totalNum !== test.total_marks && (
+          <p className="text-xs text-gray-400 mb-4">
+            All obtained scores will be rescaled proportionally to keep each student&apos;s percentage the same (e.g. {test.total_marks} → {totalNum}).
+          </p>
+        )}
+        {(!validTotal || totalNum === test.total_marks) && <div className="mb-4" />}
 
         <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Minimum Score (%)</label>
         <input
@@ -2220,7 +2409,7 @@ function ConfirmDeleteAssignmentModal({ assignment, teacherEmail, onCancel, onCo
       >
         <h3 className="text-lg font-bold text-gray-800 mb-1">Remove "{assignment.title}"?</h3>
         <p className="text-sm text-gray-500 mb-4">
-          This permanently removes the assignment and its worksheet link for every student in Class {assignment.class}. This cannot be undone.
+          This permanently removes the worksheet and its link for every student in Class {assignment.class}. This cannot be undone.
         </p>
 
         {step === 'confirm' ? (
@@ -2247,7 +2436,7 @@ function ConfirmDeleteAssignmentModal({ assignment, teacherEmail, onCancel, onCo
         ) : (
           <>
             <p className="text-xs text-gray-500 mb-2">
-              Enter the 6-digit code sent to <span className="font-medium text-gray-700">{teacherEmail}</span> to remove this assignment:
+              Enter the 6-digit code sent to <span className="font-medium text-gray-700">{teacherEmail}</span> to remove this worksheet:
             </p>
             <input
               autoFocus
@@ -2284,7 +2473,142 @@ function ConfirmDeleteAssignmentModal({ assignment, teacherEmail, onCancel, onCo
                 disabled={code.length !== 6 || verifying}
                 className="text-sm font-semibold px-4 py-2 rounded-lg text-white bg-red-500 hover:bg-red-600 transition disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                {verifying ? 'Verifying…' : 'Remove Assignment'}
+                {verifying ? 'Verifying…' : 'Remove Worksheet'}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+const DELETE_TEST_OTP_PURPOSE = 'delete-test'
+
+function ConfirmDeleteTestModal({ test, teacherEmail, onCancel, onConfirm }) {
+  const [step, setStep] = useState('confirm') // confirm | otp
+  const [code, setCode] = useState('')
+  const [sending, setSending] = useState(false)
+  const [verifying, setVerifying] = useState(false)
+  const [error, setError] = useState('')
+  const [cooldown, setCooldown] = useState(0)
+  const cooldownRef = useRef(null)
+
+  useEffect(() => () => clearInterval(cooldownRef.current), [])
+
+  function startCooldown() {
+    setCooldown(OTP_RESEND_COOLDOWN)
+    clearInterval(cooldownRef.current)
+    cooldownRef.current = setInterval(() => {
+      setCooldown((c) => {
+        if (c <= 1) { clearInterval(cooldownRef.current); return 0 }
+        return c - 1
+      })
+    }, 1000)
+  }
+
+  async function sendCode() {
+    setError('')
+    setSending(true)
+    const { data, error: fnErr } = await supabase.functions.invoke('send-action-otp', {
+      body: { purpose: DELETE_TEST_OTP_PURPOSE },
+    })
+    setSending(false)
+    if (fnErr || data?.ok === false) {
+      setError(data?.error || 'Could not send code. Please try again.')
+      return
+    }
+    startCooldown()
+    setStep('otp')
+  }
+
+  async function verifyAndConfirm() {
+    setError('')
+    setVerifying(true)
+    const { data, error: fnErr } = await supabase.functions.invoke('verify-action-otp', {
+      body: { code: code.trim(), purpose: DELETE_TEST_OTP_PURPOSE },
+    })
+    setVerifying(false)
+    if (fnErr || data?.ok === false) {
+      setError(data?.error || 'Invalid or expired code.')
+      return
+    }
+    onConfirm()
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onCancel}>
+      <div
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="text-lg font-bold text-gray-800 mb-1">Delete Test #{test.testNo}?</h3>
+        <p className="text-sm text-gray-500 mb-4">
+          This permanently deletes {test.subject} · {test.topic} · Class {test.class} and every student's score for it, from the student dashboard, teacher dashboard, and Supabase. This cannot be undone.
+        </p>
+
+        {step === 'confirm' ? (
+          <>
+            {error && (
+              <div className="rounded-lg px-3 py-2 text-xs mb-4 bg-red-50 border border-red-200 text-red-600">{error}</div>
+            )}
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={onCancel}
+                className="text-sm font-medium px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={sendCode}
+                disabled={sending}
+                className="text-sm font-semibold px-4 py-2 rounded-lg text-white bg-red-500 hover:bg-red-600 transition disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {sending ? 'Sending code…' : 'Send Confirmation Code'}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="text-xs text-gray-500 mb-2">
+              Enter the 6-digit code sent to <span className="font-medium text-gray-700">{teacherEmail}</span> to permanently delete this test:
+            </p>
+            <input
+              autoFocus
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]{6}"
+              maxLength={6}
+              value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+              onKeyDown={(e) => { if (e.key === 'Enter' && code.length === 6) verifyAndConfirm() }}
+              placeholder="123456"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-2 tracking-[0.3em] text-center focus:outline-none focus:ring-2 focus:ring-red-200"
+            />
+            <button
+              type="button"
+              disabled={cooldown > 0 || sending}
+              onClick={sendCode}
+              className="text-xs font-medium mb-4 disabled:text-gray-400 text-red-600"
+            >
+              {cooldown > 0 ? `Resend code in ${cooldown}s` : 'Resend code'}
+            </button>
+            {error && (
+              <div className="rounded-lg px-3 py-2 text-xs mb-4 bg-red-50 border border-red-200 text-red-600">{error}</div>
+            )}
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={onCancel}
+                className="text-sm font-medium px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={verifyAndConfirm}
+                disabled={code.length !== 6 || verifying}
+                className="text-sm font-semibold px-4 py-2 rounded-lg text-white bg-red-500 hover:bg-red-600 transition disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {verifying ? 'Verifying…' : 'Delete Test'}
               </button>
             </div>
           </>
