@@ -1145,7 +1145,7 @@ function ini(name) {
         {/* Tests table */}
         {view === 'tests' && (
           <div className="bg-white rounded-xl shadow overflow-hidden">
-            <div className="overflow-x-auto">
+            <div className="overflow-x-hidden">
               <table className="w-full text-sm">
                 <thead>
                   {(() => {
@@ -1156,7 +1156,7 @@ function ini(name) {
                     )
                     const TH = ({ col, className = '', children }) => (
                       <th
-                        className={`px-4 py-3 cursor-pointer select-none hover:text-amber-400 transition-colors whitespace-nowrap ${className}`}
+                        className={`px-2 py-3 cursor-pointer select-none hover:text-amber-400 transition-colors whitespace-nowrap ${className}`}
                         onClick={() => toggleTestSort(col)}
                       >
                         {children}<SI col={col} />
@@ -1167,16 +1167,16 @@ function ini(name) {
                         <TH col="testNo" className="text-center">#</TH>
                         <TH col="date">Date</TH>
                         <TH col="subject">Subject</TH>
-                        <TH col="topic">Chapter / Topic</TH>
+                        <TH col="topic">Topic</TH>
                         <TH col="class" className="text-center">Class</TH>
                         <TH col="total_marks" className="text-center">Total</TH>
                         <TH col="appearedCount" className="text-center">Students</TH>
                         <TH col="topCount70" className="text-center">
-                          Top {topPctFilter === '0' ? '' : `≥${topPctFilter}%`}{topNFilter !== 'any' ? ` (≤${topNFilter})` : ''}
+                          <span title={`Top ${topPctFilter === '0' ? '' : `≥${topPctFilter}%`}${topNFilter !== 'any' ? ` (≤${topNFilter})` : ''}`}>Top</span>
                         </TH>
-                        <th className="px-4 py-3 text-center whitespace-nowrap">Edit</th>
-                        <th className="px-4 py-3 text-center whitespace-nowrap">Delete</th>
-                        <th className="px-4 py-3 text-center whitespace-nowrap">Send</th>
+                        <th className="px-2 py-3 text-center whitespace-nowrap">Edit</th>
+                        <th className="px-2 py-3 text-center whitespace-nowrap">Delete</th>
+                        <th className="px-2 py-3 text-center whitespace-nowrap">Send</th>
                       </tr>
                     )
                   })()}
@@ -1188,39 +1188,41 @@ function ini(name) {
                     const result = sendResult?.key === t.key ? sendResult : null
                     return (
                       <tr key={t.key} className="hover:bg-amber-50">
-                        <td className="px-4 py-3 text-center font-bold text-gray-400 text-xs">#{t.testNo}</td>
-                        <td className="px-4 py-3 text-gray-600 text-xs whitespace-nowrap">{t.date}</td>
-                        <td className="px-4 py-3">
+                        <td className="px-2 py-3 text-center font-bold text-gray-400 text-xs">#{t.testNo}</td>
+                        <td className="px-2 py-3 text-gray-600 text-xs whitespace-nowrap">{t.date}</td>
+                        <td className="px-2 py-3">
                           <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${t.subject === 'Science' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>{t.subject}</span>
                         </td>
-                        <td className="px-4 py-3 text-gray-700 text-xs max-w-[200px] truncate">{t.topic}</td>
-                        <td className="px-4 py-3 text-center">
+                        <td className="px-2 py-3 text-gray-700 text-xs max-w-[130px] truncate" title={t.topic}>{t.topic}</td>
+                        <td className="px-2 py-3 text-center">
                           <span className="px-2 py-0.5 rounded-full text-xs font-bold text-white" style={{ background: GOLD }}>{t.class}</span>
                         </td>
-                        <td className="px-4 py-3 text-center font-medium text-gray-700">{t.total_marks}</td>
-                        <td className="px-4 py-3 text-center text-gray-600 text-xs">{appearedCount}/{t.scores.length}</td>
-                        <td className="px-4 py-3 text-center">
+                        <td className="px-2 py-3 text-center font-medium text-gray-700">{t.total_marks}</td>
+                        <td className="px-2 py-3 text-center text-gray-600 text-xs">{appearedCount}/{t.scores.length}</td>
+                        <td className="px-2 py-3 text-center">
                           <span className={`font-semibold text-xs ${topCount > 0 ? 'text-green-600' : 'text-gray-400'}`}>{topCount}</span>
                         </td>
-                        <td className="px-4 py-3 text-center">
+                        <td className="px-2 py-3 text-center">
                           <button
                             onClick={() => setEditingTest(t)}
-                            className="text-xs font-semibold px-3 py-1.5 rounded-lg border transition"
+                            title="Edit test"
+                            className="text-sm px-2 py-1.5 rounded-lg border transition"
                             style={{ color: GOLD, borderColor: GOLD }}
                           >
-                            ✏️ Edit
+                            ✏️
                           </button>
                         </td>
-                        <td className="px-4 py-3 text-center">
+                        <td className="px-2 py-3 text-center">
                           <button
                             onClick={() => setDeletingTest(t)}
                             disabled={deletingTestKey === t.key}
-                            className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-red-300 text-red-500 hover:bg-red-50 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                            title="Delete test"
+                            className="text-sm px-2 py-1.5 rounded-lg border border-red-300 text-red-500 hover:bg-red-50 transition disabled:opacity-40 disabled:cursor-not-allowed"
                           >
-                            {deletingTestKey === t.key ? '…' : '🗑️ Delete'}
+                            {deletingTestKey === t.key ? '…' : '🗑️'}
                           </button>
                         </td>
-                        <td className="px-4 py-3 text-center">
+                        <td className="px-2 py-3 text-center">
                           {isSending ? (
                             <span className="text-xs text-amber-600 font-medium">Sending…</span>
                           ) : result && !result.success ? (
@@ -1237,7 +1239,7 @@ function ini(name) {
                           ) : (
                             <button
                               onClick={() => openPreview(t)}
-                              className="text-xs font-semibold px-3 py-1.5 rounded-lg text-white transition"
+                              className="text-xs font-semibold px-2.5 py-1.5 rounded-lg text-white transition"
                               style={{ background: GOLD }}
                             >
                               📤 Send
@@ -2085,7 +2087,7 @@ function MessageFormatModal({ format, onCancel, onSave }) {
           value={text}
           onChange={(e) => setText(e.target.value)}
           rows={14}
-          className="w-full border border-gray-200 rounded-lg p-4 whitespace-pre-wrap text-sm text-gray-800 font-mono mb-4 focus:outline-none focus:ring-2 focus:ring-amber-200"
+          className="w-full bg-gray-50 border border-gray-200 rounded-lg p-4 whitespace-pre-wrap text-sm text-gray-800 font-mono mb-4 focus:outline-none focus:ring-2 focus:ring-amber-200"
         />
         <div className="flex gap-2 justify-between">
           <button
