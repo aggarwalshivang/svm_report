@@ -478,6 +478,23 @@ export default function TeacherDashboard() {
     setDeletingTestKey(null)
   }
 
+  async function notifyStudentWorksheetWebhook(action, { name, phone, studentClass }) {
+    try {
+      await fetch('https://n8n.saraswatividyamandir.com/webhook/add-delete-svm-worksheet-students', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action,
+          'Student Name': name,
+          'Phone Number': phone,
+          'Class': String(studentClass),
+        }),
+      })
+    } catch {
+      // best-effort notification; a failure here shouldn't block add/delete
+    }
+  }
+
   async function addStudent() {
     const validEmails = newStudent.emails.filter((e) => e.trim())
     if (!newStudent.name.trim() || !newStudent.class || !newStudent.sourceId.trim() || !validEmails.length) return
@@ -504,13 +521,19 @@ export default function TeacherDashboard() {
       alert("Add was blocked by Supabase (likely a Row Level Security policy) — the student was not added.")
     } else {
       setStudents((prev) => [...prev, ...data])
+      notifyStudentWorksheetWebhook('add', {
+        name: newStudent.name.trim(),
+        phone,
+        studentClass: newStudent.class,
+      })
       setNewStudent({ name: '', class: '9', sourceId: '', phone: '', emails: [''] })
       setManageMode('list')
     }
     setSavingStudent(false)
   }
 
-  async function deleteStudent(studentId) {
+  async function deleteStudent(student) {
+    const studentId = student.student_id
     setConfirmDeleteStudent(null)
     setDeletingStudentId(studentId)
     // Delete child rows (student_scores) before the parent (student_emails) — deleting
@@ -546,6 +569,11 @@ export default function TeacherDashboard() {
     setStudents((prev) => prev.filter((s) => s.student_id !== studentId))
     setAllScores((prev) => prev.filter((s) => s.student_id !== studentId))
     if (expandedStudent === studentId) setExpandedStudent(null)
+    notifyStudentWorksheetWebhook('remove', {
+      name: student.student_name,
+      phone: student.phone,
+      studentClass: student.class,
+    })
     setDeletingStudentId(null)
   }
 
@@ -1961,7 +1989,7 @@ x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
           student={confirmDeleteStudent}
           teacherEmail={session?.email}
           onCancel={() => setConfirmDeleteStudent(null)}
-          onConfirm={() => deleteStudent(confirmDeleteStudent.student_id)}
+          onConfirm={() => deleteStudent(confirmDeleteStudent)}
         />
       )}
 
