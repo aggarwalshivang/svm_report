@@ -697,8 +697,8 @@ export default function TeacherDashboard() {
     return (
       <div className="min-h-screen flex items-center justify-center" style={{ background: '#1a0800' }}>
         <div className="text-center">
-          <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4" style={{ background: NAV }}>
-            <span className="text-lg font-black" style={{ color: GOLD }}>S</span>
+          <div className="w-14 h-14 rounded-2xl overflow-hidden mx-auto mb-4" style={{ background: NAV }}>
+            <img src="/shivang.png" alt="Saraswati VidyaMandir" className="w-full h-full object-cover" />
           </div>
           <p className="font-semibold text-sm" style={{ color: GOLD }}>Loading data…</p>
         </div>
@@ -711,8 +711,8 @@ export default function TeacherDashboard() {
       {/* Navbar */}
       <nav className="text-white px-5 py-3 flex items-center justify-between" style={{ background: NAV, borderBottom: '2px solid rgba(200,134,10,0.35)', boxShadow: '0 4px 16px rgba(0,0,0,0.2)' }}>
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: GOLD }}>
-            <span className="text-lg font-black text-white">S</span>
+          <div className="w-9 h-9 rounded-xl overflow-hidden flex-shrink-0" style={{ background: GOLD }}>
+            <img src="/shivang.png" alt="Saraswati VidyaMandir" className="w-full h-full object-cover" />
           </div>
           <div>
             <div className="flex items-center gap-2">

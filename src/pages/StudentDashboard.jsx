@@ -21,22 +21,66 @@ function formatIST(isoString) {
   })
 }
 
-// Status priority: a teacher-marked "completed" assignment always shows
-// Completed. Otherwise it's Submitted (student turned something in — late or
-// not) if they already did, Closed (teacher shut off submissions early —
-// distinct from Missing, since the deadline may not have passed yet), Missing
-// (deadline passed, nothing turned in) or Assigned (still open).
-function assignmentStatus(a, submission) {
-  if (a.completed) return { key: 'completed', label: '✓ Completed', color: '#16a34a', bg: 'rgba(34,197,94,0.12)' }
-  if (submission) {
-    const late = a.deadline && new Date(submission.submitted_at) > new Date(a.deadline)
+// Status priority: turning a worksheet in — a teacher-marked "completed"
+// flag, an in-app upload (assignment_submissions), or a matched
+// worksheet_feedback row (graded feedback is itself proof it was handed in)
+// — always shows Completed; there's no separate "submitted, awaiting
+// feedback" state. Then Closed (teacher shut off submissions early —
+// distinct from Missing, since the deadline may not have passed yet),
+// Missing (deadline passed, nothing turned in) or Assigned (still open).
+function assignmentStatus(a, submission, feedback) {
+  if (a.completed || submission || feedback) {
+    const late = submission && a.deadline && new Date(submission.submitted_at) > new Date(a.deadline)
     return late
-      ? { key: 'submitted', label: '✓ Submitted late', color: '#16a34a', bg: 'rgba(34,197,94,0.12)' }
-      : { key: 'submitted', label: '✓ Submitted', color: '#16a34a', bg: 'rgba(34,197,94,0.12)' }
+      ? { key: 'completed', label: '✓ Completed (late)', color: '#16a34a', bg: 'rgba(34,197,94,0.12)' }
+      : { key: 'completed', label: '✓ Completed', color: '#16a34a', bg: 'rgba(34,197,94,0.12)' }
   }
   if (a.submissions_closed) return { key: 'closed', label: '🔒 Closed', color: '#6b7280', bg: 'rgba(107,114,128,0.14)' }
   if (a.deadline && new Date(a.deadline) < new Date()) return { key: 'missing', label: 'Missing', color: '#dc2626', bg: 'rgba(220,38,38,0.12)' }
   return { key: 'assigned', label: 'Assigned', color: GOLD, bg: 'rgba(200,134,10,0.12)' }
+}
+
+// worksheet_feedback is a one-off import from the school's old Google Form
+// process, which names worksheets in its own free-text, evolving way (e.g.
+// "Algebraic Identities till Example 16") — never the same string as this
+// app's clean assignment titles (e.g. "Exploring Algebraic Identities"), so
+// there's no exact key to join on. Score every (assignment, feedback) pair by
+// title word-overlap + subject compatibility, then greedily pair off the
+// best-scoring matches so each assignment gets at most one feedback row.
+const FEEDBACK_MATCH_STOPWORDS = new Set([
+  'and', 'of', 'in', 'the', 'to', 'a', 'an', 'for', 'on', 'with',
+  'till', 'ex', 'example', 'examples', 'q', 'class', 'chapter',
+  'full', 'exercise', 'exercises', 'end', 'sum', 'till',
+])
+function sigWords(s) {
+  return new Set(
+    (s || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter((w) => w.length > 2 && !FEEDBACK_MATCH_STOPWORDS.has(w) && Number.isNaN(Number(w)))
+  )
+}
+function jaccard(a, b) {
+  if (!a.size || !b.size) return 0
+  let inter = 0
+  for (const w of a) if (b.has(w)) inter++
+  return inter / (a.size + b.size - inter)
+}
+function subjectsCompatible(assignmentSubject, feedbackSubject) {
+  const norm = (s) => (s || '').toLowerCase().replace('maths', 'math')
+  const as = norm(assignmentSubject)
+  const fs = norm(feedbackSubject)
+  if (!as || !fs) return false
+  return fs.includes(as) || as.includes(fs)
+}
+const FEEDBACK_MATCH_THRESHOLD = 0.2
+
+// worksheet_feedback rows store text prefixed with "[Assignment Name, Class N,
+// Subject] " so a row reads standalone without a join — redundant once shown
+// on the assignment's own card, so strip it back off for display.
+function stripFeedbackContext(text) {
+  return (text || '').replace(/^\[[^\]]*\]\s*/, '')
 }
 
 export default function StudentDashboard() {
@@ -52,9 +96,12 @@ export default function StudentDashboard() {
   const [classSize, setClassSize] = useState(null)
   const [assignments, setAssignments] = useState([])
   const [submissions, setSubmissions] = useState([]) // this student's assignment_submissions rows
+  const [worksheetFeedback, setWorksheetFeedback] = useState([]) // this student's worksheet_feedback rows
   const [section, setSection] = useState('report') // report | assignments
   const [assignmentFilter, setAssignmentFilter] = useState('all') // all | assigned | missing | submitted | completed
   const [assignmentSort, setAssignmentSort] = useState('deadline-desc') // deadline-asc | deadline-desc | subject
+  const [assignmentSubjectFilter, setAssignmentSubjectFilter] = useState('All') // All | Maths | Science
+  const [assignmentSearch, setAssignmentSearch] = useState('')
 
   useEffect(() => {
     if (!session?.studentId) return
@@ -157,6 +204,18 @@ export default function StudentDashboard() {
     load()
   }, [session?.studentId])
 
+  useEffect(() => {
+    if (!session?.studentId) return
+    async function load() {
+      const { data } = await supabase
+        .from('worksheet_feedback')
+        .select('*')
+        .eq('student_id', session.studentId)
+      setWorksheetFeedback(data || [])
+    }
+    load()
+  }, [session?.studentId])
+
   // Re-fetched (not run inside an effect) after a card's Turn in/Resubmit succeeds.
   async function loadSubmissions() {
     if (!session?.studentId) return
@@ -173,9 +232,43 @@ export default function StudentDashboard() {
     return map
   }, [submissions])
 
+  // worksheet_feedback rows already belong to this exact student (queried by
+  // student_id above) but have no assignment_id, just a subject + free-text
+  // assignment_name — so pairing a row with the right card still needs a
+  // best-effort match. Each assignment independently picks its own
+  // best-scoring compatible feedback row (title word-overlap + subject match,
+  // ties broken by how close submitted_at is to the deadline). Deliberately
+  // not unique on the feedback side: a single combined submission (e.g.
+  // "Algebraic Identities | Motion", subject "Math & Science") can be the
+  // right match for two separate assignment cards at once.
+  const feedbackByAssignmentId = useMemo(() => {
+    const map = {}
+    assignments.forEach((a) => {
+      const aWords = sigWords(a.title)
+      const deadlineMs = new Date(a.deadline).getTime()
+      let best = null, bestScore = 0, bestDateDiff = Infinity
+      worksheetFeedback.forEach((f) => {
+        if (!subjectsCompatible(a.subject, f.subject)) return
+        const score = jaccard(aWords, sigWords(f.assignment_name))
+        if (score < FEEDBACK_MATCH_THRESHOLD) return
+        const dateDiff = Math.abs(new Date(f.submitted_at).getTime() - deadlineMs)
+        if (score > bestScore || (score === bestScore && dateDiff < bestDateDiff)) {
+          best = f; bestScore = score; bestDateDiff = dateDiff
+        }
+      })
+      if (best) map[a.id] = best
+    })
+    return map
+  }, [assignments, worksheetFeedback])
+
   const assignmentsWithStatus = useMemo(
-    () => assignments.map((a) => ({ ...a, submission: submissionByAssignment[a.id] || null, status: assignmentStatus(a, submissionByAssignment[a.id]) })),
-    [assignments, submissionByAssignment]
+    () => assignments.map((a) => ({
+      ...a,
+      submission: submissionByAssignment[a.id] || null,
+      status: assignmentStatus(a, submissionByAssignment[a.id], feedbackByAssignmentId[a.id]),
+      feedback: feedbackByAssignmentId[a.id] || null,
+    })),
+    [assignments, submissionByAssignment, feedbackByAssignmentId]
   )
 
   const missingCount  = useMemo(() => assignmentsWithStatus.filter((a) => a.status.key === 'missing').length, [assignmentsWithStatus])
@@ -183,11 +276,14 @@ export default function StudentDashboard() {
 
   const displayedAssignments = useMemo(() => {
     let rows = assignmentFilter === 'all' ? [...assignmentsWithStatus] : assignmentsWithStatus.filter((a) => a.status.key === assignmentFilter)
+    if (assignmentSubjectFilter !== 'All') rows = rows.filter((a) => a.subject === assignmentSubjectFilter)
+    const q = assignmentSearch.trim().toLowerCase()
+    if (q) rows = rows.filter((a) => a.title.toLowerCase().includes(q))
     if (assignmentSort === 'deadline-asc')  rows.sort((a, b) => new Date(a.deadline) - new Date(b.deadline))
     if (assignmentSort === 'deadline-desc') rows.sort((a, b) => new Date(b.deadline) - new Date(a.deadline))
     if (assignmentSort === 'subject')       rows.sort((a, b) => a.subject.localeCompare(b.subject))
     return rows
-  }, [assignmentsWithStatus, assignmentFilter, assignmentSort])
+  }, [assignmentsWithStatus, assignmentFilter, assignmentSubjectFilter, assignmentSearch, assignmentSort])
 
   function logout() {
     localStorage.removeItem('svm_session')
@@ -275,8 +371,8 @@ export default function StudentDashboard() {
   if (loading) return (
     <div className="min-h-screen dark-theme flex items-center justify-center" style={{ background: '#1a0800' }}>
       <div className="text-center">
-        <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4" style={{ background: NAV }}>
-          <span className="text-lg font-black" style={{ color: GOLD }}>S</span>
+        <div className="w-14 h-14 rounded-2xl overflow-hidden mx-auto mb-4" style={{ background: NAV }}>
+          <img src="/shivang.png" alt="Saraswati VidyaMandir" className="w-full h-full object-cover" />
         </div>
         <p className="font-semibold text-sm" style={{ color: '#b89060' }}>Loading your report…</p>
       </div>
@@ -288,8 +384,8 @@ export default function StudentDashboard() {
       {/* Navbar */}
       <nav className="text-white px-5 py-3 flex items-center justify-between" style={{ background: NAV, borderBottom: `2px solid ${GOLD}`, boxShadow: '0 2px 8px rgba(0,0,0,0.15)' }}>
         <div className="flex items-center gap-3 min-w-0">
-          <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: GOLD }}>
-            <span className="text-lg font-black text-white">S</span>
+          <div className="w-9 h-9 rounded-xl overflow-hidden flex-shrink-0" style={{ background: GOLD }}>
+            <img src="/shivang.png" alt="Saraswati VidyaMandir" className="w-full h-full object-cover" />
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -593,8 +689,8 @@ export default function StudentDashboard() {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <StatCard label="Missing"  value={missingCount}  sub={missingCount ? 'Overdue — submit now' : 'All caught up'} type="red" />
               <StatCard label="Upcoming" value={upcomingCount} sub="Due before deadline" type="gold" />
-              <StatCard label="Submitted" value={assignmentsWithStatus.filter((a) => a.status.key === 'submitted').length} sub="Turned in" type="green" />
-              <StatCard label="Completed" value={assignmentsWithStatus.filter((a) => a.status.key === 'completed').length} sub="Closed by teacher" type="brown" />
+              <StatCard label="Completed" value={assignmentsWithStatus.filter((a) => a.status.key === 'completed').length} sub="Turned in" type="green" />
+              <StatCard label="Checked by Teacher" value={assignmentsWithStatus.filter((a) => a.feedback).length} sub="Feedback received" type="brown" />
             </div>
 
             {/* Filter + Sort bar */}
@@ -605,13 +701,21 @@ export default function StudentDashboard() {
                   { key: 'assigned',  label: 'Assigned' },
                   { key: 'missing',   label: 'Missing' },
                   { key: 'closed',    label: 'Closed' },
-                  { key: 'submitted', label: 'Submitted' },
                   { key: 'completed', label: 'Completed' },
                 ].map((f) => (
                   <button key={f.key} onClick={() => setAssignmentFilter(f.key)}
                     className="px-3 py-1 rounded-full text-xs font-medium transition"
                     style={assignmentFilter === f.key ? { background: GOLD, color: 'white' } : { background: 'rgba(200,134,10,0.12)', color: '#9a7040' }}
                   >{f.label}</button>
+                ))}
+              </div>
+              <div className="w-px h-4 bg-gray-200 hidden sm:block" />
+              <div className="flex gap-1.5 flex-wrap">
+                {['All', 'Science', 'Maths'].map((f) => (
+                  <button key={f} onClick={() => setAssignmentSubjectFilter(f)}
+                    className="px-3 py-1 rounded-full text-xs font-medium transition"
+                    style={assignmentSubjectFilter === f ? { background: GOLD, color: 'white' } : { background: 'rgba(200,134,10,0.12)', color: '#9a7040' }}
+                  >{f}</button>
                 ))}
               </div>
               <div className="w-px h-4 bg-gray-200 hidden sm:block" />
@@ -630,7 +734,15 @@ export default function StudentDashboard() {
                   >{label}</button>
                 ))}
               </div>
-              <span className="ml-auto text-xs text-gray-400">{displayedAssignments.length} shown</span>
+              <input
+                type="text"
+                value={assignmentSearch}
+                onChange={(e) => setAssignmentSearch(e.target.value)}
+                placeholder="🔍 Search worksheets…"
+                className="ml-auto px-3 py-1.5 rounded-lg text-xs border focus:outline-none w-full sm:w-48"
+                style={{ borderColor: 'rgba(200,134,10,0.25)', background: 'rgba(200,134,10,0.04)' }}
+              />
+              <span className="text-xs text-gray-400 whitespace-nowrap">{displayedAssignments.length} shown</span>
             </div>
 
             {/* Cards */}
@@ -786,14 +898,27 @@ function AssignmentCard({ a, session, onSubmitted }) {
         </span>
       </div>
 
-      {a.notes && (
-        <p className="text-xs text-gray-500 break-all line-clamp-2" title={a.notes}>{a.notes}</p>
-      )}
-
       {a.link && (
         <a href={a.link} target="_blank" rel="noreferrer" className="text-xs font-semibold self-start" style={{ color: GOLD }}>
           📄 View worksheet ↗
         </a>
+      )}
+
+      {(a.feedback?.handwriting_feedback || a.feedback?.assignment_feedback) && (
+        <div className="space-y-1.5">
+          {a.feedback.handwriting_feedback && (
+            <p className="text-xs text-gray-500">
+              <span className="font-semibold text-gray-700">✍️ Handwriting feedback: </span>
+              {stripFeedbackContext(a.feedback.handwriting_feedback)}
+            </p>
+          )}
+          {a.feedback.assignment_feedback && (
+            <p className="text-xs text-gray-500">
+              <span className="font-semibold text-gray-700">📝 Worksheet feedback: </span>
+              {stripFeedbackContext(a.feedback.assignment_feedback)}
+            </p>
+          )}
+        </div>
       )}
 
       {a.submission && (

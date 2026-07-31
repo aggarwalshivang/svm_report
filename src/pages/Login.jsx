@@ -21,6 +21,9 @@ export default function Login() {
   const [confirmPassword, setConfirmPassword] = useState('')
   const [cooldown, setCooldown] = useState(0)
   const cooldownRef = useRef(null)
+  const [showPassword, setShowPassword] = useState(false)
+  const [showNewPassword, setShowNewPassword] = useState(false)
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false)
 
   async function handleLogin(e) {
     e.preventDefault()
@@ -136,6 +139,8 @@ export default function Login() {
     setCode('')
     setNewPassword('')
     setConfirmPassword('')
+    setShowNewPassword(false)
+    setShowConfirmPassword(false)
     setCooldown(0)
     clearInterval(cooldownRef.current)
     setError('')
@@ -152,8 +157,8 @@ export default function Login() {
       <div className="rounded-2xl shadow-2xl w-full max-w-md p-5 sm:p-8" style={{ background: '#2d1200', border: '1px solid rgba(200,134,10,0.2)' }}>
         {/* Header */}
         <div className="text-center mb-8">
-          <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4" style={{ background: GOLD }}>
-            <span className="text-3xl font-black text-white">S</span>
+          <div className="w-16 h-16 rounded-2xl overflow-hidden mx-auto mb-4" style={{ background: GOLD }}>
+            <img src="/shivang.png" alt="Saraswati VidyaMandir" className="w-full h-full object-cover" />
           </div>
           <h1 className="text-2xl font-bold" style={{ color: '#f5ede0' }}>Saraswati VidyaMandir</h1>
           <p className="text-sm mt-1" style={{ color: '#9a7040' }}>Student Report Portal</p>
@@ -168,7 +173,7 @@ export default function Login() {
             <button
               key={key}
               type="button"
-              onClick={() => { setRole(key); setError(''); setPassword('') }}
+              onClick={() => { setRole(key); setError(''); setPassword(''); setShowPassword(false) }}
               className="flex-1 py-3 text-sm font-semibold transition-all border-b-2 -mb-px"
               style={role === key
                 ? { borderColor: GOLD, color: GOLD }
@@ -219,31 +224,55 @@ export default function Login() {
             </div>
             <div>
               <label className="block text-sm font-medium mb-1" style={{ color: '#d4b483' }}>New Password</label>
-              <input
-                type="password"
-                required
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="Min. 6 characters"
-                className="w-full px-4 py-3 rounded-lg focus:outline-none"
-                style={inputStyle}
-                onFocus={(e) => e.target.style.boxShadow = '0 0 0 2px #c8860a40'}
-                onBlur={(e) => e.target.style.boxShadow = ''}
-              />
+              <div className="relative">
+                <input
+                  type={showNewPassword ? 'text' : 'password'}
+                  required
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="Min. 6 characters"
+                  className="w-full px-4 py-3 pr-11 rounded-lg focus:outline-none"
+                  style={inputStyle}
+                  onFocus={(e) => e.target.style.boxShadow = '0 0 0 2px #c8860a40'}
+                  onBlur={(e) => e.target.style.boxShadow = ''}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowNewPassword((v) => !v)}
+                  tabIndex={-1}
+                  className="absolute right-0 top-0 h-full px-3 flex items-center"
+                  style={{ color: '#9a7040' }}
+                  aria-label={showNewPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showNewPassword ? '🙈' : '👁️'}
+                </button>
+              </div>
             </div>
             <div>
               <label className="block text-sm font-medium mb-1" style={{ color: '#d4b483' }}>Confirm Password</label>
-              <input
-                type="password"
-                required
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="Repeat new password"
-                className="w-full px-4 py-3 rounded-lg focus:outline-none"
-                style={inputStyle}
-                onFocus={(e) => e.target.style.boxShadow = '0 0 0 2px #c8860a40'}
-                onBlur={(e) => e.target.style.boxShadow = ''}
-              />
+              <div className="relative">
+                <input
+                  type={showConfirmPassword ? 'text' : 'password'}
+                  required
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="Repeat new password"
+                  className="w-full px-4 py-3 pr-11 rounded-lg focus:outline-none"
+                  style={inputStyle}
+                  onFocus={(e) => e.target.style.boxShadow = '0 0 0 2px #c8860a40'}
+                  onBlur={(e) => e.target.style.boxShadow = ''}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPassword((v) => !v)}
+                  tabIndex={-1}
+                  className="absolute right-0 top-0 h-full px-3 flex items-center"
+                  style={{ color: '#9a7040' }}
+                  aria-label={showConfirmPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showConfirmPassword ? '🙈' : '👁️'}
+                </button>
+              </div>
             </div>
             {error && (
               <div className="rounded-lg px-4 py-3 text-sm" style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.25)', color: '#f87171' }}>{error}</div>
@@ -346,17 +375,29 @@ export default function Login() {
                   Forgot password?
                 </button>
               </div>
-              <input
-                type="password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter password"
-                className="w-full px-4 py-3 rounded-lg focus:outline-none"
-                style={inputStyle}
-                onFocus={(e) => e.target.style.boxShadow = '0 0 0 2px #c8860a40'}
-                onBlur={(e) => e.target.style.boxShadow = ''}
-              />
+              <div className="relative">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Enter password"
+                  className="w-full px-4 py-3 pr-11 rounded-lg focus:outline-none"
+                  style={inputStyle}
+                  onFocus={(e) => e.target.style.boxShadow = '0 0 0 2px #c8860a40'}
+                  onBlur={(e) => e.target.style.boxShadow = ''}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  tabIndex={-1}
+                  className="absolute right-0 top-0 h-full px-3 flex items-center"
+                  style={{ color: '#9a7040' }}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showPassword ? '🙈' : '👁️'}
+                </button>
+              </div>
             </div>
 
             {error && (
