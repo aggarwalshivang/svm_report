@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useRef } from 'react'
+import { useEffect, useState, useMemo, useRef, Fragment } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   ComposedChart, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -40,6 +40,47 @@ The scores have been sent individually to parents via personal *WhatsApp*.
 
 *Saraswati Vidyamandir*`
 const MESSAGE_FORMAT_STORAGE_KEY = 'svm_message_format'
+// worksheet_feedback rows store text prefixed with "[Assignment Name, Class N,
+// Subject] " so a row reads standalone without a join — redundant once shown
+// under the assignment's own row here, so strip it back off for display.
+function stripFeedbackContext(text) {
+  return (text || '').replace(/^\[[^\]]*\]\s*/, '')
+}
+
+// worksheet_feedback is mostly a one-off import from the school's old Google
+// Form process, which names worksheets in its own free-text, evolving way
+// (e.g. "Algebraic Identities till Example 16") — never the same string as
+// this app's clean assignment titles, so there's no exact key to join on.
+// Same fuzzy matching as StudentDashboard.jsx: score every (assignment,
+// feedback) pair by title word-overlap + subject compatibility.
+const FEEDBACK_MATCH_STOPWORDS = new Set([
+  'and', 'of', 'in', 'the', 'to', 'a', 'an', 'for', 'on', 'with',
+  'till', 'ex', 'example', 'examples', 'q', 'class', 'chapter',
+  'full', 'exercise', 'exercises', 'end', 'sum', 'till',
+])
+function sigWords(s) {
+  return new Set(
+    (s || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter((w) => w.length > 2 && !FEEDBACK_MATCH_STOPWORDS.has(w) && Number.isNaN(Number(w)))
+  )
+}
+function jaccard(a, b) {
+  if (!a.size || !b.size) return 0
+  let inter = 0
+  for (const w of a) if (b.has(w)) inter++
+  return inter / (a.size + b.size - inter)
+}
+function subjectsCompatible(assignmentSubject, feedbackSubject) {
+  const norm = (s) => (s || '').toLowerCase().replace('maths', 'math')
+  const as = norm(assignmentSubject)
+  const fs = norm(feedbackSubject)
+  if (!as || !fs) return false
+  return fs.includes(as) || as.includes(fs)
+}
+const FEEDBACK_MATCH_THRESHOLD = 0.2
 // Creates the student's login and emails them a code to set their own
 // password, via a Supabase Edge Function — it needs the service-role key,
 // which must never live in browser code.
@@ -142,6 +183,7 @@ export default function TeacherDashboard() {
   // Assignments tab state
   const [assignments, setAssignments] = useState([])
   const [assignmentSubmissions, setAssignmentSubmissions] = useState([])
+  const [worksheetFeedback, setWorksheetFeedback] = useState([])
   const [deletingAssignmentId, setDeletingAssignmentId] = useState(null)
   const [confirmDeleteAssignment, setConfirmDeleteAssignment] = useState(null)
   const [assignmentClass, setAssignmentClass] = useState('9')
@@ -149,14 +191,16 @@ export default function TeacherDashboard() {
 
   useEffect(() => {
     async function load() {
-      const [{ data: studs }, { data: asgn }, { data: subs }] = await Promise.all([
+      const [{ data: studs }, { data: asgn }, { data: subs }, { data: wfb }] = await Promise.all([
         supabase.from('student_emails').select('*').order('class').order('student_name'),
         supabase.from('assignments').select('*').order('deadline'),
         supabase.from('assignment_submissions').select('*'),
+        supabase.from('worksheet_feedback').select('*'),
       ])
       setStudents(studs || [])
       setAssignments(asgn || [])
       setAssignmentSubmissions(subs || [])
+      setWorksheetFeedback(wfb || [])
 
       // Supabase caps at 1000 rows by default — page through all score records
       const PAGE = 1000
@@ -298,17 +342,66 @@ export default function TeacherDashboard() {
   const assignmentAnalysis = useMemo(() => {
     const rosterFor = (cls) => studentSummary.filter((s) => String(s.class) === cls)
 
+    // Grouped once so each assignment only scores its own roster's feedback
+    // rows, not the whole table. The CSV import left student_id null for any
+    // row whose name it couldn't roster-match (scripts/import-worksheet-feedback.mjs)
+    // — those rows still have a correct `class`, just no id, so they're also
+    // indexed by (class, normalized name) and re-attached to the matching
+    // roster student below instead of being silently dropped.
+    const normName = (name) => (name || '').toLowerCase().replace(/[^a-z ]/g, '').replace(/\s+/g, ' ').trim()
+    const feedbackByStudentId = new Map()
+    const feedbackByClassName = new Map()
+    worksheetFeedback.forEach((f) => {
+      if (f.student_id != null) {
+        if (!feedbackByStudentId.has(f.student_id)) feedbackByStudentId.set(f.student_id, [])
+        feedbackByStudentId.get(f.student_id).push(f)
+      } else {
+        const key = `${f.class}|${normName(f.student_name)}`
+        if (!feedbackByClassName.has(key)) feedbackByClassName.set(key, [])
+        feedbackByClassName.get(key).push(f)
+      }
+    })
+
     const perAssignment = assignments
       .map((a) => {
         const roster = rosterFor(String(a.class))
         const submittedIds = new Set(
           assignmentSubmissions.filter((s) => s.assignment_id === a.id).map((s) => s.student_id)
         )
-        const missing = roster.filter((s) => !submittedIds.has(s.student_id))
+        const aWords = sigWords(a.title)
+        const deadlineMs = new Date(a.deadline).getTime()
+
+        const perStudent = roster.map((s) => {
+          const byId = feedbackByStudentId.get(s.student_id) || []
+          const byName = feedbackByClassName.get(`${a.class}|${normName(s.student_name)}`) || []
+          const candidates = byId.length && byName.length ? [...byId, ...byName] : (byId.length ? byId : byName)
+          let best = null, bestScore = 0, bestDateDiff = Infinity
+          candidates.forEach((f) => {
+            if (!subjectsCompatible(a.subject, f.subject)) return
+            const score = jaccard(aWords, sigWords(f.assignment_name))
+            if (score < FEEDBACK_MATCH_THRESHOLD) return
+            const dateDiff = Math.abs(new Date(f.submitted_at).getTime() - deadlineMs)
+            if (score > bestScore || (score === bestScore && dateDiff < bestDateDiff)) {
+              best = f; bestScore = score; bestDateDiff = dateDiff
+            }
+          })
+          // A matched feedback row is itself proof of submission, same as
+          // assignmentStatus() on the student dashboard — some real
+          // submissions only exist as an imported feedback row, never an
+          // assignment_submissions row (that table only fills in from the
+          // in-app upload flow).
+          const submitted = submittedIds.has(s.student_id) || !!best
+          return { student: s, feedback: best, submitted }
+        })
+
+        const missing = perStudent.filter((x) => !x.submitted).map((x) => x.student)
+        const submittedWithFeedback = perStudent.filter((x) => x.submitted)
         const total = roster.length
-        const submittedCount = total - missing.length
+        const submittedCount = submittedWithFeedback.length
         const rate = total > 0 ? Math.round((submittedCount / total) * 100) : 0
-        return { assignment: a, submittedCount, total, rate, missing }
+        const gradedCount = submittedWithFeedback.filter((x) => x.feedback).length
+
+        return { assignment: a, submittedCount, total, rate, missing, gradedCount, submittedWithFeedback }
       })
       .sort((a, b) => new Date(b.assignment.deadline) - new Date(a.assignment.deadline))
 
@@ -321,7 +414,12 @@ export default function TeacherDashboard() {
     })
 
     return { perAssignment, perClass }
-  }, [assignments, assignmentSubmissions, studentSummary])
+  }, [assignments, assignmentSubmissions, worksheetFeedback, studentSummary])
+
+  const analysisByAssignmentId = useMemo(
+    () => Object.fromEntries(assignmentAnalysis.perAssignment.map((p) => [p.assignment.id, p])),
+    [assignmentAnalysis]
+  )
 
   const topPctThreshold = Number(topPctFilter) / 100
 
@@ -1409,11 +1507,10 @@ function ini(name) {
               📤 Upload Worksheet ↗
             </a>
 
-            {/* ── Worksheet Analysis ── */}
+            {/* ── Class-level summary (aggregate only — per-worksheet detail lives in the table below) ── */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
               <p className="text-sm font-semibold text-gray-700 mb-3">📊 Worksheet Analysis</p>
-
-              <div className="grid grid-cols-2 gap-3 mb-4">
+              <div className="grid grid-cols-2 gap-3">
                 {assignmentAnalysis.perClass.map((c) => (
                   <div key={c.class} className="rounded-lg border border-gray-100 p-3">
                     <p className="text-xs text-gray-400 uppercase tracking-wide font-semibold mb-1">Class {c.class}</p>
@@ -1427,50 +1524,6 @@ function ini(name) {
                     </div>
                   </div>
                 ))}
-              </div>
-
-              {assignmentAnalysis.perAssignment.length === 0 && (
-                <p className="text-center text-gray-400 py-6 text-sm">No worksheets yet.</p>
-              )}
-              <div className="divide-y divide-gray-50">
-                {assignmentAnalysis.perAssignment.map((p) => {
-                  const rateColor = p.rate >= 80 ? '#16a34a' : p.rate >= 50 ? GOLD : '#dc2626'
-                  const expanded = expandedAnalysisId === p.assignment.id
-                  return (
-                    <div key={p.assignment.id} className="py-2.5">
-                      <button
-                        onClick={() => setExpandedAnalysisId(expanded ? null : p.assignment.id)}
-                        className="w-full flex items-center justify-between gap-3 text-left"
-                      >
-                        <div className="min-w-0 flex items-center gap-2">
-                          <span className="px-2 py-0.5 rounded-full text-xs font-bold text-white flex-shrink-0" style={{ background: GOLD }}>{p.assignment.class}</span>
-                          <span className="text-sm font-medium text-gray-800 truncate">{p.assignment.title}</span>
-                        </div>
-                        <div className="flex items-center gap-2 flex-shrink-0">
-                          <span className="text-xs text-gray-500">{p.submittedCount}/{p.total}</span>
-                          <span className="text-xs font-bold w-10 text-right" style={{ color: rateColor }}>{p.rate}%</span>
-                          <span className="text-gray-300 text-[10px]">{expanded ? '▲' : '▼'}</span>
-                        </div>
-                      </button>
-                      {expanded && (
-                        <div className="mt-2 pl-1">
-                          {p.missing.length === 0
-                            ? <p className="text-xs text-green-600">Everyone submitted 🎉</p>
-                            : (
-                              <>
-                                <p className="text-xs text-gray-400 mb-1.5">{p.missing.length} not submitted:</p>
-                                <div className="flex flex-wrap gap-1.5">
-                                  {p.missing.map((s) => (
-                                    <span key={s.student_id} className="text-xs px-2 py-0.5 rounded-full bg-red-50 text-red-600 border border-red-100">{s.student_name}</span>
-                                  ))}
-                                </div>
-                              </>
-                            )}
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
               </div>
             </div>
 
@@ -1507,13 +1560,19 @@ x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
                     <tr className="text-left text-xs text-gray-300 uppercase tracking-wide" style={{ background: '#120600' }}>
                       <th className="px-3 sm:px-5 py-3 w-auto">Worksheet</th>
                       <th className="px-3 sm:px-5 py-3 w-32">Deadline</th>
+                      <th className="px-3 sm:px-5 py-3 text-center w-32">Submissions</th>
                       <th className="px-3 sm:px-5 py-3 text-center w-40">Status</th>
                       <th className="px-3 sm:px-5 py-3 text-center w-20">Remove</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
-                    {filteredAssignments.map((a) => (
-                      <tr key={a.id} className={a.completed ? 'opacity-60' : ''}>
+                    {filteredAssignments.map((a) => {
+                      const p = analysisByAssignmentId[a.id]
+                      const expanded = expandedAnalysisId === a.id
+                      const rateColor = p && (p.rate >= 80 ? '#16a34a' : p.rate >= 50 ? GOLD : '#dc2626')
+                      return (
+                      <Fragment key={a.id}>
+                      <tr className={a.completed ? 'opacity-60' : ''}>
                         <td className="px-3 sm:px-5 py-3 align-top">
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className={`px-2 py-0.5 rounded-full text-xs font-medium flex-shrink-0 ${a.subject === 'Science' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>
@@ -1532,6 +1591,20 @@ x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
                           <p className="text-[10px] text-gray-300 mt-1.5">Created {formatIST(a.created_at)}</p>
                         </td>
                         <td className="px-3 sm:px-5 py-3 align-top whitespace-nowrap text-gray-700 text-xs">{formatIST(a.deadline)}</td>
+                        <td className="px-3 sm:px-5 py-3 align-top text-center">
+                          {p ? (
+                            <button
+                              onClick={() => setExpandedAnalysisId(expanded ? null : a.id)}
+                              className="w-full text-center"
+                            >
+                              <div className="text-xs font-bold" style={{ color: rateColor }}>{p.submittedCount}/{p.total} · {p.rate}%</div>
+                              {p.submittedCount > 0 && (
+                                <div className="text-[10px] text-gray-400">{p.gradedCount}/{p.submittedCount} graded</div>
+                              )}
+                              <div className="text-gray-300 text-[10px]">{expanded ? '▲' : '▼'}</div>
+                            </button>
+                          ) : <span className="text-xs text-gray-300">—</span>}
+                        </td>
                         <td className="px-3 sm:px-5 py-3 align-top text-center">
                           <div className="flex flex-col items-stretch gap-1.5">
                             <button
@@ -1567,7 +1640,65 @@ x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
                           </button>
                         </td>
                       </tr>
-                    ))}
+                      {expanded && p && (
+                        <tr>
+                          <td colSpan={5} className="px-3 sm:px-5 pb-4 pt-0 align-top bg-gray-50">
+                            <div className="space-y-3 pt-1">
+                              {p.missing.length === 0
+                                ? <p className="text-xs text-green-600">Everyone submitted 🎉</p>
+                                : (
+                                  <div>
+                                    <p className="text-xs text-gray-400 mb-1.5">{p.missing.length} not submitted:</p>
+                                    <div className="flex flex-wrap gap-1.5">
+                                      {p.missing.map((s) => (
+                                        <span
+                                          key={s.student_id}
+                                          className="text-xs px-2 py-0.5 rounded-full"
+                                          style={{ background: 'rgba(239,68,68,0.12)', color: '#dc2626', border: '1px solid rgba(239,68,68,0.25)' }}
+                                        >
+                                          {s.student_name}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+
+                              {p.submittedWithFeedback.length > 0 && (
+                                <div>
+                                  <p className="text-xs text-gray-400 mb-1.5">
+                                    Grading: {p.gradedCount}/{p.submittedWithFeedback.length} graded
+                                  </p>
+                                  <div className="space-y-2">
+                                    {p.submittedWithFeedback.map(({ student, feedback }) => (
+                                      <div key={student.student_id} className="text-xs border border-gray-100 rounded-lg px-2.5 py-2 bg-white">
+                                        <div className="flex items-center justify-between gap-2">
+                                          <span className="font-medium text-gray-700">{student.student_name}</span>
+                                          <span className={feedback ? 'text-green-600 flex-shrink-0' : 'text-gray-400 flex-shrink-0'}>
+                                            {feedback ? '✅ Graded' : '⏳ Pending grading'}
+                                          </span>
+                                        </div>
+                                        {feedback && (feedback.handwriting_feedback || feedback.assignment_feedback) && (
+                                          <div className="mt-1 space-y-1 text-gray-500">
+                                            {feedback.handwriting_feedback && (
+                                              <p><span className="font-semibold text-gray-600">✍️ Handwriting: </span>{stripFeedbackContext(feedback.handwriting_feedback)}</p>
+                                            )}
+                                            {feedback.assignment_feedback && (
+                                              <p><span className="font-semibold text-gray-600">📝 Feedback: </span>{stripFeedbackContext(feedback.assignment_feedback)}</p>
+                                            )}
+                                          </div>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                      </Fragment>
+                      )
+                    })}
                   </tbody>
                 </table>
                 {filteredAssignments.length === 0 && (
