@@ -872,6 +872,8 @@ function AssignmentCard({ a, session, onSubmitted }) {
     form.append('portion', a.portion || a.title || '')
     form.append('folder', a.drive_folder_id || '')
     form.append('worksheet', a.link || '')
+    form.append('assignment_name', a.title || '')
+    form.append('subject', a.subject || '')
 
     const { data, error: fnErr } = await supabase.functions.invoke('submit-worksheet', { body: form })
     setUploading(false)
