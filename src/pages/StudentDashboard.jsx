@@ -892,7 +892,15 @@ function AssignmentCard({ a, session, onSubmitted }) {
     const { data, error: fnErr } = await supabase.functions.invoke('submit-worksheet', { body: form })
     setUploading(false)
     if (fnErr || data?.ok === false) {
-      setError(data?.error || fnErr?.message || 'Upload failed. Please try again.')
+      // On a non-2xx response supabase-js sets `data` to null and buries the
+      // function's actual JSON error body (from submit-worksheet's fail())
+      // inside `error.context`, a raw Response — without reading it back out
+      // the student only ever sees a generic "non-2xx status code" message.
+      let message = data?.error
+      if (!message && fnErr?.context?.json) {
+        try { message = (await fnErr.context.json())?.error } catch { /* not JSON */ }
+      }
+      setError(message || fnErr?.message || 'Upload failed. Please try again.')
       return
     }
     setFile(null)
