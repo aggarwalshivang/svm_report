@@ -147,6 +147,7 @@ Deno.serve(async (req) => {
         .from('worksheet_feedback')
         .upsert(
           {
+            assignment_id: assignmentId,
             student_id: studentId,
             student_name: studentName,
             class: Number(className),
@@ -156,7 +157,7 @@ Deno.serve(async (req) => {
             assignment_feedback: rest ? `${context} ${rest}` : null,
             submitted_at: new Date().toISOString(),
           },
-          { onConflict: 'student_name,class,assignment_name,submitted_at' }
+          { onConflict: 'assignment_id,student_id' }
         )
       if (feedbackErr) throw feedbackErr
     }
