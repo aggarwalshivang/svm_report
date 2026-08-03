@@ -248,14 +248,19 @@ export default function StudentDashboard() {
       // submissions always set assignment_id) is definitive proof — skip
       // fuzzy matching. Rows tagged for a *different* assignment must never
       // be fuzzy-matched here either; only untagged legacy CSV-import rows
-      // (assignment_id null) go through title matching.
+      // (assignment_id null) go through title matching, and only if they
+      // postdate this assignment's own creation — an old Google-Form-import
+      // row can't be a submission to a worksheet that didn't exist yet, no
+      // matter how similar the title reads.
       let best = worksheetFeedback.find((f) => f.assignment_id === a.id) || null
       if (!best) {
         const aWords = sigWords(a.title)
         const deadlineMs = new Date(a.deadline).getTime()
+        const createdMs = new Date(a.created_at).getTime()
         let bestScore = 0, bestDateDiff = Infinity
         worksheetFeedback.forEach((f) => {
           if (f.assignment_id != null) return
+          if (new Date(f.submitted_at).getTime() < createdMs) return
           if (!subjectsCompatible(a.subject, f.subject)) return
           const score = jaccard(aWords, sigWords(f.assignment_name))
           if (score < FEEDBACK_MATCH_THRESHOLD) return
