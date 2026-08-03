@@ -189,6 +189,7 @@ export default function TeacherDashboard() {
   const [assignmentClass, setAssignmentClass] = useState('9')
   const [assignmentSort, setAssignmentSort] = useState('deadline-desc')
   const [expandedAnalysisId, setExpandedAnalysisId] = useState(null)
+  const [markingAllSubmittedId, setMarkingAllSubmittedId] = useState(null)
 
   useEffect(() => {
     async function load() {
@@ -383,8 +384,15 @@ export default function TeacherDashboard() {
           const byId = feedbackByStudentId.get(s.student_id) || []
           const byName = feedbackByClassName.get(`${a.class}|${normName(s.student_name)}`) || []
           const candidates = byId.length && byName.length ? [...byId, ...byName] : (byId.length ? byId : byName)
-          let best = null, bestScore = 0, bestDateDiff = Infinity
-          candidates.forEach((f) => {
+          // A row already tagged with this exact assignment (live in-app
+          // submissions always set assignment_id) is definitive proof — skip
+          // fuzzy matching. Rows tagged for a *different* assignment must
+          // never be fuzzy-matched here either; only untagged legacy
+          // CSV-import rows (assignment_id null) go through title matching.
+          let best = candidates.find((f) => f.assignment_id === a.id) || null
+          let bestScore = best ? 1 : 0, bestDateDiff = 0
+          if (!best) candidates.forEach((f) => {
+            if (f.assignment_id != null) return
             if (!subjectsCompatible(a.subject, f.subject)) return
             const score = jaccard(aWords, sigWords(f.assignment_name))
             if (score < FEEDBACK_MATCH_THRESHOLD) return
@@ -701,6 +709,32 @@ export default function TeacherDashboard() {
       setAssignments((prev) => prev.map((a) => (a.id === assignment.id ? { ...a, submissions_closed: !submissions_closed } : a)))
       alert(`Failed to update worksheet: ${error?.message || 'blocked by Supabase (RLS)'}`)
     }
+  }
+
+  async function markAllSubmitted(p) {
+    const missing = p.missing
+    if (missing.length === 0) return
+    if (!confirm(`Mark all ${missing.length} missing student(s) as submitted for "${p.assignment.title}"? This creates a submission record for each of them (${p.total}/${p.total}) and will show up on their dashboards too.`)) return
+
+    setMarkingAllSubmittedId(p.assignment.id)
+    const submitted_at = new Date().toISOString()
+    const rows = missing.map((s) => ({
+      assignment_id: p.assignment.id,
+      student_id: s.student_id,
+      student_name: s.student_name,
+      submitted_at,
+    }))
+    const { data, error } = await supabase
+      .from('assignment_submissions')
+      .upsert(rows, { onConflict: 'assignment_id,student_id' })
+      .select('id, assignment_id, student_id, student_name, submitted_at')
+
+    if (error || !data || data.length === 0) {
+      alert(`Failed to mark submissions: ${error?.message || 'blocked by Supabase (RLS)'}`)
+    } else {
+      setAssignmentSubmissions((prev) => [...prev, ...data])
+    }
+    setMarkingAllSubmittedId(null)
   }
 
   async function deleteAssignment(id) {
@@ -1675,7 +1709,17 @@ x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
                                 ? <p className="text-xs text-green-600">Everyone submitted 🎉</p>
                                 : (
                                   <div>
-                                    <p className="text-xs text-gray-400 mb-1.5">{p.missing.length} not submitted:</p>
+                                    <div className="flex items-center justify-between gap-2 mb-1.5 flex-wrap">
+                                      <p className="text-xs text-gray-400">{p.missing.length} not submitted:</p>
+                                      <button
+                                        onClick={() => markAllSubmitted(p)}
+                                        disabled={markingAllSubmittedId === a.id}
+                                        className="text-xs font-semibold px-2.5 py-1 rounded-full transition disabled:opacity-50"
+                                        style={{ background: 'rgba(34,197,94,0.12)', color: '#16a34a' }}
+                                      >
+                                        {markingAllSubmittedId === a.id ? 'Marking…' : `Mark All Submitted (${p.total}/${p.total})`}
+                                      </button>
+                                    </div>
                                     <div className="flex flex-wrap gap-1.5">
                                       {p.missing.map((s) => (
                                         <span
@@ -2154,7 +2198,6 @@ x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
       {confirmDeleteAssignment && (
         <ConfirmDeleteAssignmentModal
           assignment={confirmDeleteAssignment}
-          teacherEmail={session?.email}
           onCancel={() => setConfirmDeleteAssignment(null)}
           onConfirm={() => deleteAssignment(confirmDeleteAssignment.id)}
         />
@@ -2536,59 +2579,7 @@ function ConfirmDeleteStudentModal({ student, teacherEmail, onCancel, onConfirm 
   )
 }
 
-const DELETE_ASSIGNMENT_OTP_PURPOSE = 'delete-assignment'
-
-function ConfirmDeleteAssignmentModal({ assignment, teacherEmail, onCancel, onConfirm }) {
-  const [step, setStep] = useState('confirm') // confirm | otp
-  const [code, setCode] = useState('')
-  const [sending, setSending] = useState(false)
-  const [verifying, setVerifying] = useState(false)
-  const [error, setError] = useState('')
-  const [cooldown, setCooldown] = useState(0)
-  const cooldownRef = useRef(null)
-
-  useEffect(() => () => clearInterval(cooldownRef.current), [])
-
-  function startCooldown() {
-    setCooldown(OTP_RESEND_COOLDOWN)
-    clearInterval(cooldownRef.current)
-    cooldownRef.current = setInterval(() => {
-      setCooldown((c) => {
-        if (c <= 1) { clearInterval(cooldownRef.current); return 0 }
-        return c - 1
-      })
-    }, 1000)
-  }
-
-  async function sendCode() {
-    setError('')
-    setSending(true)
-    const { data, error: fnErr } = await supabase.functions.invoke('send-action-otp', {
-      body: { purpose: DELETE_ASSIGNMENT_OTP_PURPOSE },
-    })
-    setSending(false)
-    if (fnErr || data?.ok === false) {
-      setError(data?.error || 'Could not send code. Please try again.')
-      return
-    }
-    startCooldown()
-    setStep('otp')
-  }
-
-  async function verifyAndConfirm() {
-    setError('')
-    setVerifying(true)
-    const { data, error: fnErr } = await supabase.functions.invoke('verify-action-otp', {
-      body: { code: code.trim(), purpose: DELETE_ASSIGNMENT_OTP_PURPOSE },
-    })
-    setVerifying(false)
-    if (fnErr || data?.ok === false) {
-      setError(data?.error || 'Invalid or expired code.')
-      return
-    }
-    onConfirm()
-  }
-
+function ConfirmDeleteAssignmentModal({ assignment, onCancel, onConfirm }) {
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onCancel}>
       <div
@@ -2599,73 +2590,20 @@ function ConfirmDeleteAssignmentModal({ assignment, teacherEmail, onCancel, onCo
         <p className="text-sm text-gray-500 mb-4">
           This permanently removes the worksheet and its link for every student in Class {assignment.class}. This cannot be undone.
         </p>
-
-        {step === 'confirm' ? (
-          <>
-            {error && (
-              <div className="rounded-lg px-3 py-2 text-xs mb-4 bg-red-50 border border-red-200 text-red-600">{error}</div>
-            )}
-            <div className="flex gap-2 justify-end">
-              <button
-                onClick={onCancel}
-                className="text-sm font-medium px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100 transition"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={sendCode}
-                disabled={sending}
-                className="text-sm font-semibold px-4 py-2 rounded-lg text-white bg-red-500 hover:bg-red-600 transition disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                {sending ? 'Sending code…' : 'Send Confirmation Code'}
-              </button>
-            </div>
-          </>
-        ) : (
-          <>
-            <p className="text-xs text-gray-500 mb-2">
-              Enter the 6-digit code sent to <span className="font-medium text-gray-700">{teacherEmail}</span> to remove this worksheet:
-            </p>
-            <input
-              autoFocus
-              type="text"
-              inputMode="numeric"
-              pattern="[0-9]{6}"
-              maxLength={6}
-              value={code}
-              onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
-              onKeyDown={(e) => { if (e.key === 'Enter' && code.length === 6) verifyAndConfirm() }}
-              placeholder="123456"
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-2 tracking-[0.3em] text-center focus:outline-none focus:ring-2 focus:ring-red-200"
-            />
-            <button
-              type="button"
-              disabled={cooldown > 0 || sending}
-              onClick={sendCode}
-              className="text-xs font-medium mb-4 disabled:text-gray-400 text-red-600"
-            >
-              {cooldown > 0 ? `Resend code in ${cooldown}s` : 'Resend code'}
-            </button>
-            {error && (
-              <div className="rounded-lg px-3 py-2 text-xs mb-4 bg-red-50 border border-red-200 text-red-600">{error}</div>
-            )}
-            <div className="flex gap-2 justify-end">
-              <button
-                onClick={onCancel}
-                className="text-sm font-medium px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100 transition"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={verifyAndConfirm}
-                disabled={code.length !== 6 || verifying}
-                className="text-sm font-semibold px-4 py-2 rounded-lg text-white bg-red-500 hover:bg-red-600 transition disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                {verifying ? 'Verifying…' : 'Remove Worksheet'}
-              </button>
-            </div>
-          </>
-        )}
+        <div className="flex gap-2 justify-end">
+          <button
+            onClick={onCancel}
+            className="text-sm font-medium px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100 transition"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            className="text-sm font-semibold px-4 py-2 rounded-lg text-white bg-red-500 hover:bg-red-600 transition"
+          >
+            Remove Worksheet
+          </button>
+        </div>
       </div>
     </div>
   )

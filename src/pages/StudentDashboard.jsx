@@ -244,18 +244,27 @@ export default function StudentDashboard() {
   const feedbackByAssignmentId = useMemo(() => {
     const map = {}
     assignments.forEach((a) => {
-      const aWords = sigWords(a.title)
-      const deadlineMs = new Date(a.deadline).getTime()
-      let best = null, bestScore = 0, bestDateDiff = Infinity
-      worksheetFeedback.forEach((f) => {
-        if (!subjectsCompatible(a.subject, f.subject)) return
-        const score = jaccard(aWords, sigWords(f.assignment_name))
-        if (score < FEEDBACK_MATCH_THRESHOLD) return
-        const dateDiff = Math.abs(new Date(f.submitted_at).getTime() - deadlineMs)
-        if (score > bestScore || (score === bestScore && dateDiff < bestDateDiff)) {
-          best = f; bestScore = score; bestDateDiff = dateDiff
-        }
-      })
+      // A row already tagged with this exact assignment (live in-app
+      // submissions always set assignment_id) is definitive proof — skip
+      // fuzzy matching. Rows tagged for a *different* assignment must never
+      // be fuzzy-matched here either; only untagged legacy CSV-import rows
+      // (assignment_id null) go through title matching.
+      let best = worksheetFeedback.find((f) => f.assignment_id === a.id) || null
+      if (!best) {
+        const aWords = sigWords(a.title)
+        const deadlineMs = new Date(a.deadline).getTime()
+        let bestScore = 0, bestDateDiff = Infinity
+        worksheetFeedback.forEach((f) => {
+          if (f.assignment_id != null) return
+          if (!subjectsCompatible(a.subject, f.subject)) return
+          const score = jaccard(aWords, sigWords(f.assignment_name))
+          if (score < FEEDBACK_MATCH_THRESHOLD) return
+          const dateDiff = Math.abs(new Date(f.submitted_at).getTime() - deadlineMs)
+          if (score > bestScore || (score === bestScore && dateDiff < bestDateDiff)) {
+            best = f; bestScore = score; bestDateDiff = dateDiff
+          }
+        })
+      }
       if (best) map[a.id] = best
     })
     return map
