@@ -187,6 +187,7 @@ export default function TeacherDashboard() {
   const [deletingAssignmentId, setDeletingAssignmentId] = useState(null)
   const [confirmDeleteAssignment, setConfirmDeleteAssignment] = useState(null)
   const [assignmentClass, setAssignmentClass] = useState('9')
+  const [assignmentSort, setAssignmentSort] = useState('deadline-desc')
   const [expandedAnalysisId, setExpandedAnalysisId] = useState(null)
 
   useEffect(() => {
@@ -336,6 +337,13 @@ export default function TeacherDashboard() {
   const filteredAssignments = assignments
     .filter((a) => String(a.class) === assignmentClass)
     .filter((a) => !search || a.title.toLowerCase().includes(search.toLowerCase()) || a.subject.toLowerCase().includes(search.toLowerCase()))
+    .sort((a, b) => {
+      if (assignmentSort === 'deadline-asc')  return new Date(a.deadline) - new Date(b.deadline)
+      if (assignmentSort === 'deadline-desc') return new Date(b.deadline) - new Date(a.deadline)
+      if (assignmentSort === 'subject')        return a.subject.localeCompare(b.subject)
+      if (assignmentSort === 'title')          return a.title.localeCompare(b.title)
+      return 0
+    })
 
   // Submission-rate analysis shown at the top of the Assignments tab — covers
   // every assignment/class, independent of the class toggle used by the table below.
@@ -932,6 +940,25 @@ export default function TeacherDashboard() {
                       style={assignmentClass === c ? { background: GOLD, color: 'white' } : { color: '#6b4c1e' }}
                     >
                       {`Class ${c}`}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {view === 'assignments' && (
+                <div className="flex bg-gray-50 rounded-lg border border-gray-200 p-1 gap-1">
+                  {[
+                    { key: 'deadline-desc', label: 'Newest' },
+                    { key: 'deadline-asc',  label: 'Oldest' },
+                    { key: 'subject',       label: 'Subject' },
+                    { key: 'title',         label: 'A–Z' },
+                  ].map(({ key, label }) => (
+                    <button
+                      key={key}
+                      onClick={() => setAssignmentSort(key)}
+                      className="px-3 py-1.5 rounded-md text-sm font-medium transition"
+                      style={assignmentSort === key ? { background: GOLD, color: 'white' } : { color: '#6b4c1e' }}
+                    >
+                      {label}
                     </button>
                   ))}
                 </div>

@@ -1,7 +1,11 @@
 // Public webhook for creating assignments from external automations (e.g. an
 // n8n HTTP Request node). Auth is a shared secret in the `x-api-key` header —
 // not a Supabase user session, since the caller isn't a logged-in teacher.
-// Inserts go straight into public.assignments using the service-role key.
+// Upserts straight into public.assignments using the service-role key, keyed
+// on (class, subject, title, deadline) -- that combination is what makes two
+// calls "the same worksheet"; re-sending it (e.g. to backfill portion/folder)
+// updates the existing row instead of creating a duplicate, while a genuinely
+// different worksheet (different title or deadline) still gets its own row.
 // Shown to teachers in the "Assignments" tab of TeacherDashboard.
 //
 // Deploy:
@@ -72,11 +76,14 @@ Deno.serve(async (req) => {
     const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
     const { data, error } = await admin
       .from('assignments')
-      .insert({
-        class: className, subject, title, deadline: deadline.toISOString(), link, notes,
-        portion, drive_folder_id: driveFolderId,
-        ...(createdAt ? { created_at: createdAt } : {}),
-      })
+      .upsert(
+        {
+          class: className, subject, title, deadline: deadline.toISOString(), link, notes,
+          portion, drive_folder_id: driveFolderId,
+          ...(createdAt ? { created_at: createdAt } : {}),
+        },
+        { onConflict: 'class,subject,title,deadline' }
+      )
       .select('id')
       .single()
     if (error) throw error
