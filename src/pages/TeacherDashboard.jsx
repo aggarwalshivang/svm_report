@@ -5,10 +5,26 @@ import {
   ReferenceLine, ResponsiveContainer, LineChart, Line, Cell, Legend,
 } from 'recharts'
 import { supabase } from '../lib/supabase'
+import { ThemeToggle } from '../lib/theme.jsx'
 
-const GOLD = '#c8860a'
-const NAV  = '#2d1200'
-const DARK = '#1a0800'
+const GOLD = 'var(--gold)'
+const NAV  = 'var(--nav)'
+const DARK = 'var(--page-bg)'
+
+const N8N_WEBHOOK_EXAMPLE = `POST https://cexbpkbadthoqbruyjdg.supabase.co/functions/v1/assignment-webhook
+Content-Type: application/json
+x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
+
+{
+  "class": "9",
+  "subject": "Maths",
+  "assignment_name": "Chapter 4 worksheet",
+  "deadline": "2026-08-05T18:00:00+05:30",
+  "link": "https://drive.google.com/file/d/.../view",
+  "other": "",
+  "portion": "Chapter 4 | 10 Qs | Class 9",
+  "folder": "<Google Drive folder id for submissions>"
+}`
 
 // Placeholders available to the teacher when customizing the top-scorer message format.
 const MESSAGE_FORMAT_PLACEHOLDERS = [
@@ -191,10 +207,13 @@ export default function TeacherDashboard() {
   const [worksheetFeedback, setWorksheetFeedback] = useState([])
   const [deletingAssignmentId, setDeletingAssignmentId] = useState(null)
   const [confirmDeleteAssignment, setConfirmDeleteAssignment] = useState(null)
+  const [confirmReopenAssignment, setConfirmReopenAssignment] = useState(null)
   const [assignmentClass, setAssignmentClass] = useState('9')
   const [assignmentSort, setAssignmentSort] = useState('deadline-desc')
   const [expandedAnalysisId, setExpandedAnalysisId] = useState(null)
   const [markingAllSubmittedId, setMarkingAllSubmittedId] = useState(null)
+  const [n8nDocsOpen, setN8nDocsOpen] = useState(false)
+  const [n8nCopied, setN8nCopied] = useState(false)
 
   useEffect(() => {
     // Supabase caps every select at 1000 rows by default — page through
@@ -711,16 +730,6 @@ export default function TeacherDashboard() {
     setDeletingStudentId(null)
   }
 
-  async function toggleAssignmentCompleted(assignment) {
-    const completed = !assignment.completed
-    setWorksheetReport((prev) => prev.map((a) => (a.id === assignment.id ? { ...a, completed } : a)))
-    const { data, error } = await supabase.from('assignments').update({ completed }).eq('id', assignment.id).select('id')
-    if (error || !data || data.length === 0) {
-      setWorksheetReport((prev) => prev.map((a) => (a.id === assignment.id ? { ...a, completed: !completed } : a)))
-      alert(`Failed to update worksheet: ${error?.message || 'blocked by Supabase (RLS)'}`)
-    }
-  }
-
   async function toggleSubmissionsClosed(assignment) {
     const submissions_closed = !assignment.submissions_closed
     setWorksheetReport((prev) => prev.map((a) => (a.id === assignment.id ? { ...a, submissions_closed } : a)))
@@ -890,7 +899,7 @@ export default function TeacherDashboard() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center" style={{ background: '#1a0800' }}>
+      <div className="min-h-screen flex items-center justify-center" style={{ background: DARK }}>
         <div className="text-center">
           <div className="w-14 h-14 rounded-2xl overflow-hidden mx-auto mb-4" style={{ background: NAV }}>
             <img src="/shivang.png" alt="Saraswati VidyaMandir" className="w-full h-full object-cover" />
@@ -902,9 +911,9 @@ export default function TeacherDashboard() {
   }
 
   return (
-    <div className="min-h-screen dark-theme" style={{ background: '#1a0800' }}>
+    <div className="min-h-screen" style={{ background: DARK }}>
       {/* Navbar */}
-      <nav className="text-white px-5 py-3 flex items-center justify-between" style={{ background: NAV, borderBottom: '2px solid rgba(200,134,10,0.35)', boxShadow: '0 4px 16px rgba(0,0,0,0.2)' }}>
+      <nav className="px-5 py-3 flex items-center justify-between" style={{ background: NAV, color: 'var(--text)', borderBottom: '2px solid rgba(200,134,10,0.35)', boxShadow: '0 4px 16px rgba(0,0,0,0.2)' }}>
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-xl overflow-hidden flex-shrink-0" style={{ background: GOLD }}>
             <img src="/shivang.png" alt="Saraswati VidyaMandir" className="w-full h-full object-cover" />
@@ -915,17 +924,18 @@ export default function TeacherDashboard() {
               <span className="font-bold text-sm sm:hidden">SVM</span>
               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ background: 'rgba(200,134,10,0.2)', color: GOLD, border: `1px solid rgba(200,134,10,0.5)` }}>Teacher</span>
             </div>
-            <p className="text-[10px] hidden sm:block mt-0.5" style={{ color: '#9a7040' }}>Student Report Portal</p>
+            <p className="text-[10px] hidden sm:block mt-0.5" style={{ color: 'var(--faint)' }}>Student Report Portal</p>
           </div>
         </div>
         <div className="flex items-center gap-3">
-          <span className="text-xs hidden sm:block" style={{ color: '#9a7040' }}>{session?.email}</span>
+          <span className="text-xs hidden sm:block" style={{ color: 'var(--faint)' }}>{session?.email}</span>
+          <ThemeToggle />
           <button
             onClick={logout}
             className="text-xs px-3 py-1.5 rounded-lg transition font-medium border"
-            style={{ background: 'transparent', borderColor: 'rgba(255,255,255,0.2)', color: '#d4b483' }}
+            style={{ background: 'transparent', borderColor: 'rgba(200,134,10,0.3)', color: 'var(--muted)' }}
             onMouseEnter={(e) => { e.currentTarget.style.background = GOLD; e.currentTarget.style.borderColor = GOLD; e.currentTarget.style.color = 'white' }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.2)'; e.currentTarget.style.color = '#d4b483' }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'rgba(200,134,10,0.3)'; e.currentTarget.style.color = 'var(--muted)' }}
           >
             Logout
           </button>
@@ -946,7 +956,7 @@ export default function TeacherDashboard() {
 
           {/* Left sidebar — vertical tabs */}
           <div className="md:w-52 md:flex-shrink-0 mb-3 md:mb-0">
-            <div className="rounded-xl border overflow-hidden flex md:flex-col" style={{ background: '#2d1200', borderColor: 'rgba(200,134,10,0.2)' }}>
+            <div className="rounded-xl border overflow-hidden flex md:flex-col" style={{ background: NAV, borderColor: 'rgba(200,134,10,0.2)' }}>
               {[
                 { k: 'students', label: 'Students', icon: '👥' },
                 { k: 'analysis', label: 'Analysis', icon: '📊' },
@@ -961,7 +971,7 @@ export default function TeacherDashboard() {
                   className="flex-1 md:flex-none flex items-center justify-center md:justify-start gap-3 px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-semibold transition-all border-b md:border-b-0 md:border-l-[3px] last:border-b-0"
                   style={view === k
                     ? { borderColor: GOLD, color: GOLD, background: 'rgba(200,134,10,0.12)' }
-                    : { borderColor: 'rgba(200,134,10,0.1)', color: '#7a5030' }
+                    : { borderColor: 'rgba(200,134,10,0.1)', color: 'var(--fainter)' }
                   }
                 >
                   <span className="text-base leading-none">{icon}</span>
@@ -984,7 +994,7 @@ export default function TeacherDashboard() {
                       key={c}
                       onClick={() => setClassFilter(c)}
                       className="px-4 py-1.5 rounded-md text-sm font-medium transition"
-                      style={classFilter === c ? { background: GOLD, color: 'white' } : { color: '#6b4c1e' }}
+                      style={classFilter === c ? { background: GOLD, color: 'white' } : { color: 'var(--text)' }}
                     >
                       {c === 'All' ? 'All Classes' : `Class ${c}`}
                     </button>
@@ -998,7 +1008,7 @@ export default function TeacherDashboard() {
                       key={c}
                       onClick={() => setAssignmentClass(c)}
                       className="px-4 py-1.5 rounded-md text-sm font-medium transition"
-                      style={assignmentClass === c ? { background: GOLD, color: 'white' } : { color: '#6b4c1e' }}
+                      style={assignmentClass === c ? { background: GOLD, color: 'white' } : { color: 'var(--text)' }}
                     >
                       {`Class ${c}`}
                     </button>
@@ -1017,7 +1027,7 @@ export default function TeacherDashboard() {
                       key={key}
                       onClick={() => setAssignmentSort(key)}
                       className="px-3 py-1.5 rounded-md text-sm font-medium transition"
-                      style={assignmentSort === key ? { background: GOLD, color: 'white' } : { color: '#6b4c1e' }}
+                      style={assignmentSort === key ? { background: GOLD, color: 'white' } : { color: 'var(--text)' }}
                     >
                       {label}
                     </button>
@@ -1043,7 +1053,7 @@ export default function TeacherDashboard() {
                       value={topPctFilter}
                       onChange={(e) => setTopPctFilter(e.target.value)}
                       className="border border-gray-200 rounded-lg px-2.5 py-2 text-xs font-medium bg-gray-50 focus:outline-none"
-                      style={{ color: '#6b4c1e' }}
+                      style={{ color: 'var(--text)' }}
                     >
                       {Array.from({ length: 11 }, (_, i) => i * 10).map((p) => (
                         <option key={p} value={p}>{p === 0 ? 'Any (0%)' : `≥${p}%`}</option>
@@ -1058,7 +1068,7 @@ export default function TeacherDashboard() {
                           key={n}
                           onClick={() => setTopNFilter(n)}
                           className="px-3 py-1.5 rounded-md text-xs font-medium transition"
-                          style={topNFilter === n ? { background: GOLD, color: 'white' } : { color: '#6b4c1e' }}
+                          style={topNFilter === n ? { background: GOLD, color: 'white' } : { color: 'var(--text)' }}
                         >
                           {n === 'any' ? 'Any' : n}
                         </button>
@@ -1123,7 +1133,7 @@ export default function TeacherDashboard() {
                       className="px-3 py-1 rounded-full text-xs font-semibold transition-all"
                       style={chapterSubject === s
                         ? { background: GOLD, color: '#fff' }
-                        : { background: 'rgba(200,134,10,0.1)', color: '#9a7040' }
+                        : { background: 'rgba(200,134,10,0.1)', color: 'var(--faint)' }
                       }
                     >{s}</button>
                   ))}
@@ -1249,7 +1259,7 @@ function ini(name) {
               <div style={{ flex: 1, minWidth: 0 }}>
                 {/* Class label */}
                 <div style={{ textAlign: 'center', marginBottom: '24px' }}>
-                  <span style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '3px', color: '#9a7040', textTransform: 'uppercase' }}>Class</span>
+                  <span style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '3px', color: 'var(--faint)', textTransform: 'uppercase' }}>Class</span>
                   <div style={{ fontSize: '28px', fontWeight: 900, color: GOLD, lineHeight: 1.1 }}>{label}</div>
                 </div>
 
@@ -1268,7 +1278,7 @@ function ini(name) {
                           boxShadow: `0 0 18px ${color}66`,
                           marginBottom: '8px', flexShrink: 0,
                         }}>{ini(s.student_name)}</div>
-                        <div style={{ color: '#f5ede0', fontWeight: 700, fontSize: '11px', textAlign: 'center', lineHeight: '1.3', marginBottom: '4px', wordBreak: 'break-word' }}>
+                        <div style={{ color: 'var(--text)', fontWeight: 700, fontSize: '11px', textAlign: 'center', lineHeight: '1.3', marginBottom: '4px', wordBreak: 'break-word' }}>
                           {s.student_name}
                         </div>
                         <div style={{ color, fontWeight: 900, fontSize: '14px', marginBottom: '8px' }}>{s.avgPct}%</div>
@@ -1294,13 +1304,13 @@ function ini(name) {
                     padding: '9px 14px', borderRadius: '10px', marginBottom: '6px',
                     background: 'rgba(200,134,10,0.07)', border: '1px solid rgba(200,134,10,0.15)',
                   }}>
-                    <span style={{ color: '#9a7040', fontWeight: 700, fontSize: '11px', width: '22px', flexShrink: 0 }}>#{i + 4}</span>
+                    <span style={{ color: 'var(--faint)', fontWeight: 700, fontSize: '11px', width: '22px', flexShrink: 0 }}>#{i + 4}</span>
                     <div style={{
                       width: '30px', height: '30px', borderRadius: '50%',
                       background: GOLD, color: '#fff', fontWeight: 900, fontSize: '11px',
                       display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
                     }}>{ini(s.student_name)}</div>
-                    <span style={{ color: '#f5ede0', fontWeight: 600, fontSize: '13px', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <span style={{ color: 'var(--text)', fontWeight: 600, fontSize: '13px', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {s.student_name}
                     </span>
                     <span style={{ color: Number(s.avgPct) >= 80 ? '#4ade80' : Number(s.avgPct) >= 60 ? GOLD : '#f87171', fontWeight: 700, fontSize: '13px', flexShrink: 0 }}>
@@ -1310,7 +1320,7 @@ function ini(name) {
                 ))}
 
                 {students.length === 0 && (
-                  <div style={{ textAlign: 'center', padding: '32px 0', color: '#9a7040', fontSize: '13px' }}>No data yet</div>
+                  <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--faint)', fontSize: '13px' }}>No data yet</div>
                 )}
               </div>
             )
@@ -1319,13 +1329,13 @@ function ini(name) {
           return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div>
-                <span style={{ fontSize: '11px', fontWeight: 700, color: '#9a7040', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--faint)', textTransform: 'uppercase', letterSpacing: '1px' }}>
                   Ranked by overall average · min. 1 test
                 </span>
               </div>
 
               <div style={{
-                background: '#1a0800',
+                background: DARK,
                 border: '1px solid rgba(200,134,10,0.25)',
                 borderRadius: '20px',
                 padding: '32px 28px 28px',
@@ -1342,7 +1352,7 @@ function ini(name) {
                       Saraswati VidyaMandir
                     </span>
                   </div>
-                  <div style={{ color: '#7a5030', fontSize: '12px', marginTop: '4px' }}>Top Performers — All Time</div>
+                  <div style={{ color: 'var(--fainter)', fontSize: '12px', marginTop: '4px' }}>Top Performers — All Time</div>
                 </div>
 
                 {/* Two class columns */}
@@ -1377,7 +1387,7 @@ function ini(name) {
                       </th>
                     )
                     return (
-                      <tr className="text-left text-xs text-gray-500 uppercase tracking-wide" style={{ background: '#120600' }}>
+                      <tr className="text-left text-xs text-gray-500 uppercase tracking-wide" style={{ background: NAV }}>
                         <TH col="testNo" className="text-center">#</TH>
                         <TH col="date">Date</TH>
                         <TH col="subject">Subject</TH>
@@ -1493,7 +1503,7 @@ function ini(name) {
                     </th>
                   )
                   return (
-                    <tr className="text-left text-xs text-gray-500 uppercase tracking-wide" style={{ background: '#120600' }}>
+                    <tr className="text-left text-xs text-gray-500 uppercase tracking-wide" style={{ background: NAV }}>
                       <TH col="student_name">Student</TH>
                       <TH col="class" className="text-center">Class</TH>
                       <TH col="rank" className="text-center">Rank</TH>
@@ -1542,7 +1552,7 @@ function ini(name) {
                           ? <span className="text-xs font-bold" style={{ color: '#f87171' }}>▼ Down</span>
                           : s.trend === 'stable'
                             ? <span className="text-xs font-bold" style={{ color: '#c8860a' }}>→ Stable</span>
-                            : <span className="text-xs" style={{ color: '#9a7040' }}>—</span>
+                            : <span className="text-xs" style={{ color: 'var(--faint)' }}>—</span>
                       }
                     </td>
                     <td className="px-3 sm:px-5 py-3 text-center hidden lg:table-cell">
@@ -1616,36 +1626,46 @@ function ini(name) {
             </div>
 
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-              <p className="text-sm font-semibold text-gray-700 mb-2">Send worksheets from n8n</p>
-              <p className="text-xs text-gray-500 mb-2">
-                POST to this endpoint with header <code className="bg-gray-100 px-1 rounded">x-api-key</code> to add a worksheet:
-              </p>
-              <pre className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs overflow-x-auto text-gray-700 whitespace-pre-wrap">
-{`POST https://cexbpkbadthoqbruyjdg.supabase.co/functions/v1/assignment-webhook
-Content-Type: application/json
-x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
-
-{
-  "class": "9",
-  "subject": "Maths",
-  "assignment_name": "Chapter 4 worksheet",
-  "deadline": "2026-08-05T18:00:00+05:30",
-  "link": "https://drive.google.com/file/d/.../view",
-  "other": "",
-  "portion": "Chapter 4 | 10 Qs | Class 9",
-  "folder": "<Google Drive folder id for submissions>"
-}`}
-              </pre>
-              <p className="text-[11px] text-gray-400 mt-2">
-                <code className="bg-gray-100 px-1 rounded">link</code>, <code className="bg-gray-100 px-1 rounded">portion</code> and <code className="bg-gray-100 px-1 rounded">folder</code> are only needed if students should be able to turn this worksheet in.
-              </p>
+              <button
+                onClick={() => setN8nDocsOpen((v) => !v)}
+                className="w-full flex items-center justify-between text-sm font-semibold text-gray-700"
+              >
+                Send worksheets from n8n
+                <span className="text-gray-300 text-[10px]">{n8nDocsOpen ? '▲' : '▼'}</span>
+              </button>
+              {n8nDocsOpen && (
+                <div className="mt-2">
+                  <p className="text-xs text-gray-500 mb-2">
+                    POST to this endpoint with header <code className="bg-gray-100 px-1 rounded">x-api-key</code> to add a worksheet:
+                  </p>
+                  <div className="relative">
+                    <pre className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 pr-16 text-xs overflow-x-auto text-gray-700 whitespace-pre-wrap">
+                      {N8N_WEBHOOK_EXAMPLE}
+                    </pre>
+                    <button
+                      onClick={async () => {
+                        await navigator.clipboard.writeText(N8N_WEBHOOK_EXAMPLE)
+                        setN8nCopied(true)
+                        setTimeout(() => setN8nCopied(false), 1500)
+                      }}
+                      className="absolute top-2 right-2 text-[10px] font-semibold px-2 py-1 rounded-full transition"
+                      style={{ background: 'rgba(200,134,10,0.12)', color: GOLD }}
+                    >
+                      {n8nCopied ? '✓ Copied' : 'Copy'}
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-gray-400 mt-2">
+                    <code className="bg-gray-100 px-1 rounded">link</code>, <code className="bg-gray-100 px-1 rounded">portion</code> and <code className="bg-gray-100 px-1 rounded">folder</code> are only needed if students should be able to turn this worksheet in.
+                  </p>
+                </div>
+              )}
             </div>
 
             <div className="bg-white rounded-xl shadow overflow-hidden">
               <div className="overflow-x-auto">
                 <table className="w-full text-sm table-fixed">
                   <thead>
-                    <tr className="text-left text-xs text-gray-300 uppercase tracking-wide" style={{ background: '#120600' }}>
+                    <tr className="text-left text-xs uppercase tracking-wide" style={{ background: NAV, color: 'var(--faint)' }}>
                       <th className="px-3 sm:px-5 py-3 w-auto">Worksheet</th>
                       <th className="px-3 sm:px-5 py-3 w-32">Deadline</th>
                       <th className="px-3 sm:px-5 py-3 text-center w-32">Submissions</th>
@@ -1692,36 +1712,24 @@ x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
                             <div className="text-gray-300 text-[10px]">{expanded ? '▲' : '▼'}</div>
                           </button>
                         </td>
-                        <td className="px-3 sm:px-5 py-3 align-top text-center">
-                          <div className="flex flex-col items-stretch gap-1.5">
-                            <button
-                              onClick={() => toggleAssignmentCompleted(a)}
-                              className="text-xs font-semibold px-2.5 py-1 rounded-full transition"
-                              style={a.completed
-                                ? { background: 'rgba(34,197,94,0.12)', color: '#16a34a' }
-                                : { background: 'rgba(200,134,10,0.12)', color: GOLD }
-                              }
-                            >
-                              {a.completed ? '✓ Completed' : 'Mark Completed'}
-                            </button>
-                            <button
-                              onClick={() => toggleSubmissionsClosed(a)}
-                              title={a.submissions_closed ? 'Students can no longer submit this worksheet' : 'Stop accepting new submissions, even before the deadline'}
-                              className="text-xs font-semibold px-2.5 py-1 rounded-full transition"
-                              style={a.submissions_closed
-                                ? { background: 'rgba(239,68,68,0.12)', color: '#dc2626' }
-                                : { background: 'rgba(107,114,128,0.12)', color: '#6b7280' }
-                              }
-                            >
-                              {a.submissions_closed ? '🔒 Closed' : 'Close Submissions'}
-                            </button>
-                          </div>
+                        <td className="px-3 sm:px-5 py-3 align-middle text-center">
+                          <button
+                            onClick={() => (a.submissions_closed ? setConfirmReopenAssignment(a) : toggleSubmissionsClosed(a))}
+                            title={a.submissions_closed ? 'Requires a confirmation code to reopen' : 'Stop accepting new submissions, even before the deadline'}
+                            className="text-xs font-bold px-3 py-2 rounded-lg shadow-sm transition hover:brightness-110 whitespace-nowrap"
+                            style={a.submissions_closed
+                              ? { background: '#dc2626', color: '#fff' }
+                              : { background: GOLD, color: '#fff' }
+                            }
+                          >
+                            {a.submissions_closed ? '🔒 Closed' : 'Close Submissions'}
+                          </button>
                         </td>
-                        <td className="px-3 sm:px-5 py-3 align-top text-center">
+                        <td className="px-3 sm:px-5 py-3 align-middle text-center">
                           <button
                             onClick={() => setConfirmDeleteAssignment(a)}
                             disabled={deletingAssignmentId === a.id}
-                            className="text-xs font-medium text-red-500 hover:text-red-600 transition disabled:opacity-50"
+                            className="text-xs font-bold text-red-500 hover:text-red-600 transition disabled:opacity-50"
                           >
                             {deletingAssignmentId === a.id ? '…' : 'Remove'}
                           </button>
@@ -1818,7 +1826,7 @@ x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
                     .filter((s) => !search || s.student_name.toLowerCase().includes(search.toLowerCase()))
                   return (
                     <>
-                <div className="px-5 py-4 border-b flex items-center justify-between" style={{ background: '#120600' }}>
+                <div className="px-5 py-4 border-b flex items-center justify-between" style={{ background: NAV }}>
                   <div>
                     <p className="font-semibold text-gray-800">Student Roster</p>
                     <p className="text-xs text-gray-500 mt-0.5">
@@ -1835,7 +1843,7 @@ x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
                 </div>
 
                 {/* Column headers */}
-                <div className="px-5 py-2 flex items-center gap-3 text-[10px] font-bold uppercase tracking-wider text-gray-400 border-b" style={{ background: '#150700' }}>
+                <div className="px-5 py-2 flex items-center gap-3 text-[10px] font-bold uppercase tracking-wider text-gray-400 border-b" style={{ background: NAV }}>
                   <span className="w-12 flex-shrink-0">Class</span>
                   <span className="flex-1">Student Name</span>
                   <span className="w-16 text-center flex-shrink-0">Emails</span>
@@ -2083,7 +2091,7 @@ x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
             ) : (
               /* Add student form */
               <div className="bg-white rounded-xl shadow overflow-hidden max-w-xl">
-                <div className="px-5 py-4 border-b" style={{ background: '#120600' }}>
+                <div className="px-5 py-4 border-b" style={{ background: NAV }}>
                   <p className="font-semibold text-gray-800">Add New Student</p>
                 </div>
                 <div className="p-6 space-y-5">
@@ -2109,7 +2117,7 @@ x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
                           key={c}
                           onClick={() => setNewStudent((p) => ({ ...p, class: c }))}
                           className="px-8 py-2.5 rounded-lg text-sm font-semibold transition"
-                          style={newStudent.class === c ? { background: GOLD, color: 'white' } : { background: '#f5ede0', color: '#6b4c1e' }}
+                          style={newStudent.class === c ? { background: GOLD, color: 'white' } : { background: 'rgba(200,134,10,0.1)', color: 'var(--text)' }}
                         >
                           Class {c}
                         </button>
@@ -2226,6 +2234,18 @@ x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
           assignment={confirmDeleteAssignment}
           onCancel={() => setConfirmDeleteAssignment(null)}
           onConfirm={() => deleteAssignment(confirmDeleteAssignment.id)}
+        />
+      )}
+
+      {confirmReopenAssignment && (
+        <ConfirmReopenSubmissionsModal
+          assignment={confirmReopenAssignment}
+          teacherEmail={session?.email}
+          onCancel={() => setConfirmReopenAssignment(null)}
+          onConfirm={() => {
+            toggleSubmissionsClosed(confirmReopenAssignment)
+            setConfirmReopenAssignment(null)
+          }}
         />
       )}
 
@@ -2645,6 +2665,144 @@ function ConfirmDeleteAssignmentModal({ assignment, onCancel, onConfirm }) {
   )
 }
 
+const REOPEN_SUBMISSIONS_OTP_PURPOSE = 'reopen-worksheet-submissions'
+
+function ConfirmReopenSubmissionsModal({ assignment, teacherEmail, onCancel, onConfirm }) {
+  const [step, setStep] = useState('confirm') // confirm | otp
+  const [code, setCode] = useState('')
+  const [sending, setSending] = useState(false)
+  const [verifying, setVerifying] = useState(false)
+  const [error, setError] = useState('')
+  const [cooldown, setCooldown] = useState(0)
+  const cooldownRef = useRef(null)
+
+  useEffect(() => () => clearInterval(cooldownRef.current), [])
+
+  function startCooldown() {
+    setCooldown(OTP_RESEND_COOLDOWN)
+    clearInterval(cooldownRef.current)
+    cooldownRef.current = setInterval(() => {
+      setCooldown((c) => {
+        if (c <= 1) { clearInterval(cooldownRef.current); return 0 }
+        return c - 1
+      })
+    }, 1000)
+  }
+
+  async function sendCode() {
+    setError('')
+    setSending(true)
+    const { data, error: fnErr } = await supabase.functions.invoke('send-action-otp', {
+      body: { purpose: REOPEN_SUBMISSIONS_OTP_PURPOSE },
+    })
+    setSending(false)
+    if (fnErr || data?.ok === false) {
+      setError(data?.error || 'Could not send code. Please try again.')
+      return
+    }
+    startCooldown()
+    setStep('otp')
+  }
+
+  async function verifyAndConfirm() {
+    setError('')
+    setVerifying(true)
+    const { data, error: fnErr } = await supabase.functions.invoke('verify-action-otp', {
+      body: { code: code.trim(), purpose: REOPEN_SUBMISSIONS_OTP_PURPOSE },
+    })
+    setVerifying(false)
+    if (fnErr || data?.ok === false) {
+      setError(data?.error || 'Invalid or expired code.')
+      return
+    }
+    onConfirm()
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onCancel}>
+      <div
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="text-lg font-bold text-gray-800 mb-1">Reopen "{assignment.title}"?</h3>
+        <p className="text-sm text-gray-500 mb-4">
+          This lets Class {assignment.class} students submit this worksheet again. A code is required since submissions were deliberately closed.
+        </p>
+
+        {step === 'confirm' ? (
+          <>
+            {error && (
+              <div className="rounded-lg px-3 py-2 text-xs mb-4 bg-red-50 border border-red-200 text-red-600">{error}</div>
+            )}
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={onCancel}
+                className="text-sm font-medium px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={sendCode}
+                disabled={sending}
+                className="text-sm font-semibold px-4 py-2 rounded-lg text-white transition disabled:opacity-40 disabled:cursor-not-allowed"
+                style={{ background: GOLD }}
+              >
+                {sending ? 'Sending code…' : 'Send Confirmation Code'}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="text-xs text-gray-500 mb-2">
+              Enter the 6-digit code sent to <span className="font-medium text-gray-700">{teacherEmail}</span> to reopen submissions:
+            </p>
+            <input
+              autoFocus
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]{6}"
+              maxLength={6}
+              value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+              onKeyDown={(e) => { if (e.key === 'Enter' && code.length === 6) verifyAndConfirm() }}
+              placeholder="123456"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-2 tracking-[0.3em] text-center focus:outline-none focus:ring-2 focus:ring-orange-200"
+            />
+            <button
+              type="button"
+              disabled={cooldown > 0 || sending}
+              onClick={sendCode}
+              className="text-xs font-medium mb-4 disabled:text-gray-400"
+              style={{ color: cooldown > 0 ? undefined : GOLD }}
+            >
+              {cooldown > 0 ? `Resend code in ${cooldown}s` : 'Resend code'}
+            </button>
+            {error && (
+              <div className="rounded-lg px-3 py-2 text-xs mb-4 bg-red-50 border border-red-200 text-red-600">{error}</div>
+            )}
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={onCancel}
+                className="text-sm font-medium px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={verifyAndConfirm}
+                disabled={code.length !== 6 || verifying}
+                className="text-sm font-semibold px-4 py-2 rounded-lg text-white transition disabled:opacity-40 disabled:cursor-not-allowed"
+                style={{ background: GOLD }}
+              >
+                {verifying ? 'Verifying…' : 'Reopen Submissions'}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 const DELETE_TEST_OTP_PURPOSE = 'delete-test'
 
 function ConfirmDeleteTestModal({ test, teacherEmail, onCancel, onConfirm }) {
@@ -2900,8 +3058,8 @@ function StudentDetailModal({ student, scores, onClose }) {
               <ResponsiveContainer width="100%" height={160}>
                 <LineChart data={chartData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(200,134,10,0.12)" />
-                  <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#9a7040' }} minTickGap={48} interval="preserveStartEnd" />
-                  <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: '#9a7040' }} unit="%" />
+                  <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--faint)' }} minTickGap={48} interval="preserveStartEnd" />
+                  <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: 'var(--faint)' }} unit="%" />
                   <ReferenceLine y={80} stroke="#16a34a" strokeDasharray="4 3" strokeWidth={1.5}
                     label={{ value: '80%', position: 'insideTopRight', fontSize: 9, fill: '#16a34a' }} />
                   <Tooltip formatter={(v) => `${v}%`} />
@@ -2920,8 +3078,8 @@ function StudentDetailModal({ student, scores, onClose }) {
               <ResponsiveContainer width="100%" height={160}>
                 <BarChart data={subjectData} barSize={28}>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(200,134,10,0.12)" />
-                  <XAxis dataKey="subject" tick={{ fontSize: 11, fill: '#9a7040' }} />
-                  <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: '#9a7040' }} unit="%" />
+                  <XAxis dataKey="subject" tick={{ fontSize: 11, fill: 'var(--faint)' }} />
+                  <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: 'var(--faint)' }} unit="%" />
                   <Tooltip formatter={(v) => `${v}%`} />
                   <Bar dataKey="avg" fill={GOLD} radius={[4, 4, 0, 0]} />
                 </BarChart>
@@ -2940,12 +3098,12 @@ function StudentDetailModal({ student, scores, onClose }) {
                 { key: 'weak',     label: '⚠️ Weak (<60%)',    count: weakTopics.length },
               ].map(({ key, label, count }) => (
                 <button key={key} onClick={() => setTab(key)}
-                  className="flex items-center gap-1.5 px-3 sm:px-4 py-2.5 text-xs font-medium transition border-b-2 -mb-px whitespace-nowrap flex-shrink-0"
-                  style={tab === key ? { borderColor: GOLD, color: GOLD } : { borderColor: 'transparent', color: '#6b7280' }}
+                  className={`flex items-center gap-1.5 px-3 sm:px-4 py-2.5 text-xs font-medium transition border-b-2 -mb-px whitespace-nowrap flex-shrink-0 ${tab === key ? '' : 'text-gray-500'}`}
+                  style={tab === key ? { borderColor: GOLD, color: GOLD } : { borderColor: 'transparent' }}
                 >
                   {label}
-                  <span className="rounded-full px-1.5 py-0.5 font-bold text-[10px]"
-                    style={tab === key ? { background: GOLD, color: 'white' } : { background: '#f3f4f6', color: '#6b7280' }}>
+                  <span className={`rounded-full px-1.5 py-0.5 font-bold text-[10px] ${tab === key ? 'text-white' : 'bg-gray-100 text-gray-500'}`}
+                    style={tab === key ? { background: GOLD } : {}}>
                     {count}
                   </span>
                 </button>
@@ -2963,7 +3121,7 @@ function StudentDetailModal({ student, scores, onClose }) {
                         className="px-2.5 py-1 rounded-full text-xs font-semibold transition"
                         style={subjectFilter === f
                           ? { background: GOLD, color: 'white' }
-                          : { background: 'rgba(200,134,10,0.12)', color: '#9a7040', border: '1px solid rgba(200,134,10,0.25)' }}
+                          : { background: 'rgba(200,134,10,0.12)', color: 'var(--faint)', border: '1px solid rgba(200,134,10,0.25)' }}
                       >{f}</button>
                     ))}
                   </div>
@@ -2981,7 +3139,7 @@ function StudentDetailModal({ student, scores, onClose }) {
                         className="px-2.5 py-1 rounded text-[10px] font-semibold transition"
                         style={sortBy === key
                           ? { background: 'rgba(200,134,10,0.22)', color: GOLD, border: '1px solid rgba(200,134,10,0.4)' }
-                          : { background: 'rgba(200,134,10,0.06)', color: '#9a7040', border: '1px solid rgba(200,134,10,0.2)' }}
+                          : { background: 'rgba(200,134,10,0.06)', color: 'var(--faint)', border: '1px solid rgba(200,134,10,0.2)' }}
                       >{label}</button>
                     ))}
                   </div>
@@ -3119,7 +3277,7 @@ function DeltaBadge({ delta }) {
     <span style={{
       display: 'inline-block', fontSize: '10px', fontWeight: 600,
       padding: '2px 8px', borderRadius: '999px',
-      background: 'rgba(200,134,10,0.1)', color: '#9a7040',
+      background: 'rgba(200,134,10,0.1)', color: 'var(--faint)',
       border: '1px solid rgba(200,134,10,0.22)',
     }}>±0%</span>
   )
@@ -3205,7 +3363,7 @@ function ChapterBarChart({ topics }) {
         <CartesianGrid strokeDasharray="3 3" stroke="rgba(200,134,10,0.12)" />
         <XAxis
           dataKey="topic"
-          tick={{ fontSize: 10, fill: '#9a7040' }}
+          tick={{ fontSize: 10, fill: 'var(--faint)' }}
           angle={-35}
           textAnchor="end"
           interval={0}
@@ -3214,17 +3372,17 @@ function ChapterBarChart({ topics }) {
         <YAxis
           yAxisId="pct"
           domain={[0, 100]}
-          tick={{ fontSize: 10, fill: '#9a7040' }}
+          tick={{ fontSize: 10, fill: 'var(--faint)' }}
           unit="%"
-          label={{ value: 'Avg %', angle: -90, position: 'insideLeft', fontSize: 10, fill: '#9a7040', offset: 10 }}
+          label={{ value: 'Avg %', angle: -90, position: 'insideLeft', fontSize: 10, fill: 'var(--faint)', offset: 10 }}
         />
         <YAxis
           yAxisId="cnt"
           orientation="right"
           domain={[0, maxCount + 1]}
-          tick={{ fontSize: 10, fill: '#9a7040' }}
+          tick={{ fontSize: 10, fill: 'var(--faint)' }}
           allowDecimals={false}
-          label={{ value: 'Tests', angle: 90, position: 'insideRight', fontSize: 10, fill: '#9a7040', offset: 10 }}
+          label={{ value: 'Tests', angle: 90, position: 'insideRight', fontSize: 10, fill: 'var(--faint)', offset: 10 }}
         />
         <Tooltip
           content={({ active, payload }) => {
@@ -3246,7 +3404,7 @@ function ChapterBarChart({ topics }) {
         <ReferenceLine yAxisId="pct" y={60} stroke="#c8860a" strokeDasharray="4 3" strokeWidth={1}
           label={{ value: '60%', position: 'insideTopRight', fontSize: 9, fill: '#c8860a' }} />
         <Bar yAxisId="pct" dataKey="avg" radius={[4, 4, 0, 0]}
-          label={{ position: 'top', fontSize: 9, fill: '#9a7040', formatter: (v) => `${v}%` }}
+          label={{ position: 'top', fontSize: 9, fill: 'var(--faint)', formatter: (v) => `${v}%` }}
         >
           {data.map((entry, i) => <Cell key={i} fill={entry.fill} />)}
         </Bar>

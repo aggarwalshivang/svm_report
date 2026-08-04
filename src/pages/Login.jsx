@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { ThemeToggle } from '../lib/theme.jsx'
 
 const RESEND_COOLDOWN = 45 // seconds, must match send-password-otp's cooldown
 
-const GOLD = '#c8860a'
-const NAV  = '#2d1200'
-const DARK = '#1a0800'
+const GOLD = 'var(--gold)'
+const NAV  = 'var(--nav)'
+const DARK = 'var(--page-bg)'
 
 export default function Login() {
   const navigate = useNavigate()
@@ -147,21 +148,22 @@ export default function Login() {
   }
 
   const inputStyle = {
-    background: 'rgba(10,3,0,0.6)',
-    border: '1px solid rgba(200,134,10,0.25)',
-    color: '#f5ede0',
+    background: 'var(--input-bg)',
+    border: '1px solid var(--input-border)',
+    color: 'var(--text)',
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4" style={{ background: '#1a0800' }}>
-      <div className="rounded-2xl shadow-2xl w-full max-w-md p-5 sm:p-8" style={{ background: '#2d1200', border: '1px solid rgba(200,134,10,0.2)' }}>
+    <div className="min-h-screen flex items-center justify-center p-4" style={{ background: DARK }}>
+      <div className="rounded-2xl shadow-2xl w-full max-w-md p-5 sm:p-8 relative" style={{ background: NAV, border: '1px solid rgba(200,134,10,0.2)' }}>
+        <ThemeToggle className="absolute top-4 right-4" />
         {/* Header */}
         <div className="text-center mb-8">
           <div className="w-16 h-16 rounded-2xl overflow-hidden mx-auto mb-4" style={{ background: GOLD }}>
             <img src="/shivang.png" alt="Saraswati VidyaMandir" className="w-full h-full object-cover" />
           </div>
-          <h1 className="text-2xl font-bold" style={{ color: '#f5ede0' }}>Saraswati VidyaMandir</h1>
-          <p className="text-sm mt-1" style={{ color: '#9a7040' }}>Student Report Portal</p>
+          <h1 className="text-2xl font-bold" style={{ color: 'var(--text)' }}>Saraswati VidyaMandir</h1>
+          <p className="text-sm mt-1" style={{ color: 'var(--faint)' }}>Student Report Portal</p>
         </div>
 
         {/* Tabs */}
@@ -177,7 +179,7 @@ export default function Login() {
               className="flex-1 py-3 text-sm font-semibold transition-all border-b-2 -mb-px"
               style={role === key
                 ? { borderColor: GOLD, color: GOLD }
-                : { borderColor: 'transparent', color: '#7a5030' }
+                : { borderColor: 'transparent', color: 'var(--fainter)' }
               }
             >
               {label}
@@ -190,8 +192,8 @@ export default function Login() {
             <div className="w-14 h-14 rounded-full flex items-center justify-center mx-auto" style={{ background: 'rgba(200,134,10,0.15)' }}>
               <span className="text-2xl">✅</span>
             </div>
-            <p className="font-semibold" style={{ color: '#f5ede0' }}>Password updated!</p>
-            <p className="text-sm" style={{ color: '#9a7040' }}>You can now log in with your new password.</p>
+            <p className="font-semibold" style={{ color: 'var(--text)' }}>Password updated!</p>
+            <p className="text-sm" style={{ color: 'var(--faint)' }}>You can now log in with your new password.</p>
             <button
               onClick={resetForgotState}
               className="text-sm font-medium"
@@ -202,11 +204,11 @@ export default function Login() {
           </div>
         ) : forgotStep === 'verify' ? (
           <form onSubmit={handleVerifyOtp} className="space-y-4">
-            <p className="text-sm" style={{ color: '#9a7040' }}>
-              Enter the 6-digit code sent to <span className="font-medium" style={{ color: '#d4b483' }}>{email}</span> and choose a new password.
+            <p className="text-sm" style={{ color: 'var(--faint)' }}>
+              Enter the 6-digit code sent to <span className="font-medium" style={{ color: 'var(--muted)' }}>{email}</span> and choose a new password.
             </p>
             <div>
-              <label className="block text-sm font-medium mb-1" style={{ color: '#d4b483' }}>Code</label>
+              <label className="block text-sm font-medium mb-1" style={{ color: 'var(--muted)' }}>Code</label>
               <input
                 type="text"
                 inputMode="numeric"
@@ -223,7 +225,7 @@ export default function Login() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1" style={{ color: '#d4b483' }}>New Password</label>
+              <label className="block text-sm font-medium mb-1" style={{ color: 'var(--muted)' }}>New Password</label>
               <div className="relative">
                 <input
                   type={showNewPassword ? 'text' : 'password'}
@@ -241,7 +243,7 @@ export default function Login() {
                   onClick={() => setShowNewPassword((v) => !v)}
                   tabIndex={-1}
                   className="absolute right-0 top-0 h-full px-3 flex items-center"
-                  style={{ color: '#9a7040' }}
+                  style={{ color: 'var(--faint)' }}
                   aria-label={showNewPassword ? 'Hide password' : 'Show password'}
                 >
                   {showNewPassword ? '🙈' : '👁️'}
@@ -249,7 +251,7 @@ export default function Login() {
               </div>
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1" style={{ color: '#d4b483' }}>Confirm Password</label>
+              <label className="block text-sm font-medium mb-1" style={{ color: 'var(--muted)' }}>Confirm Password</label>
               <div className="relative">
                 <input
                   type={showConfirmPassword ? 'text' : 'password'}
@@ -267,7 +269,7 @@ export default function Login() {
                   onClick={() => setShowConfirmPassword((v) => !v)}
                   tabIndex={-1}
                   className="absolute right-0 top-0 h-full px-3 flex items-center"
-                  style={{ color: '#9a7040' }}
+                  style={{ color: 'var(--faint)' }}
                   aria-label={showConfirmPassword ? 'Hide password' : 'Show password'}
                 >
                   {showConfirmPassword ? '🙈' : '👁️'}
@@ -292,7 +294,7 @@ export default function Login() {
               disabled={cooldown > 0 || loading}
               onClick={handleResendOtp}
               className="w-full text-sm font-medium py-2"
-              style={{ color: cooldown > 0 ? '#7a5030' : GOLD }}
+              style={{ color: cooldown > 0 ? 'var(--fainter)' : GOLD }}
             >
               {cooldown > 0 ? `Resend code in ${cooldown}s` : 'Resend code'}
             </button>
@@ -307,9 +309,9 @@ export default function Login() {
           </form>
         ) : forgotStep === 'request' ? (
           <form onSubmit={handleRequestOtp} className="space-y-4">
-            <p className="text-sm" style={{ color: '#9a7040' }}>Enter your {role === 'teacher' ? 'teacher' : 'student'} email and we'll send a 6-digit code.</p>
+            <p className="text-sm" style={{ color: 'var(--faint)' }}>Enter your {role === 'teacher' ? 'teacher' : 'student'} email and we'll send a 6-digit code.</p>
             <div>
-              <label className="block text-sm font-medium mb-1" style={{ color: '#d4b483' }}>Email</label>
+              <label className="block text-sm font-medium mb-1" style={{ color: 'var(--muted)' }}>Email</label>
               <input
                 type="email"
                 required
@@ -347,7 +349,7 @@ export default function Login() {
         ) : (
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium mb-1" style={{ color: '#d4b483' }}>
+              <label className="block text-sm font-medium mb-1" style={{ color: 'var(--muted)' }}>
                 Email Address
               </label>
               <input
@@ -365,7 +367,7 @@ export default function Login() {
 
             <div>
               <div className="flex items-center justify-between mb-1">
-                <label className="block text-sm font-medium" style={{ color: '#d4b483' }}>Password</label>
+                <label className="block text-sm font-medium" style={{ color: 'var(--muted)' }}>Password</label>
                 <button
                   type="button"
                   onClick={() => { setForgotStep('request'); setError('') }}
@@ -392,7 +394,7 @@ export default function Login() {
                   onClick={() => setShowPassword((v) => !v)}
                   tabIndex={-1}
                   className="absolute right-0 top-0 h-full px-3 flex items-center"
-                  style={{ color: '#9a7040' }}
+                  style={{ color: 'var(--faint)' }}
                   aria-label={showPassword ? 'Hide password' : 'Show password'}
                 >
                   {showPassword ? '🙈' : '👁️'}

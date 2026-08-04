@@ -5,10 +5,11 @@ import {
   BarChart, Bar, ResponsiveContainer,
 } from 'recharts'
 import { supabase } from '../lib/supabase'
+import { ThemeToggle } from '../lib/theme.jsx'
 
-const GOLD  = '#c8860a'
-const NAV   = '#2d1200'
-const DARK  = '#1a0800'
+const GOLD  = 'var(--gold)'
+const NAV   = 'var(--nav)'
+const DARK  = 'var(--page-bg)'
 
 // Assignment dates are stored in UTC (timestamptz) — always display them in
 // Indian time regardless of the viewer's device timezone.
@@ -383,20 +384,20 @@ export default function StudentDashboard() {
   }, [scores, subjectFilter, sortBy])
 
   if (loading) return (
-    <div className="min-h-screen dark-theme flex items-center justify-center" style={{ background: '#1a0800' }}>
+    <div className="min-h-screen flex items-center justify-center" style={{ background: DARK }}>
       <div className="text-center">
         <div className="w-14 h-14 rounded-2xl overflow-hidden mx-auto mb-4" style={{ background: NAV }}>
           <img src="/shivang.png" alt="Saraswati VidyaMandir" className="w-full h-full object-cover" />
         </div>
-        <p className="font-semibold text-sm" style={{ color: '#b89060' }}>Loading your report…</p>
+        <p className="font-semibold text-sm" style={{ color: 'var(--muted)' }}>Loading your report…</p>
       </div>
     </div>
   )
 
   return (
-    <div className="min-h-screen dark-theme" style={{ background: '#1a0800' }}>
+    <div className="min-h-screen" style={{ background: DARK }}>
       {/* Navbar */}
-      <nav className="text-white px-5 py-3 flex items-center justify-between" style={{ background: NAV, borderBottom: `2px solid ${GOLD}`, boxShadow: '0 2px 8px rgba(0,0,0,0.15)' }}>
+      <nav className="px-5 py-3 flex items-center justify-between" style={{ background: NAV, color: 'var(--text)', borderBottom: `2px solid ${GOLD}`, boxShadow: '0 2px 8px rgba(0,0,0,0.15)' }}>
         <div className="flex items-center gap-3 min-w-0">
           <div className="w-9 h-9 rounded-xl overflow-hidden flex-shrink-0" style={{ background: GOLD }}>
             <img src="/shivang.png" alt="Saraswati VidyaMandir" className="w-full h-full object-cover" />
@@ -405,22 +406,25 @@ export default function StudentDashboard() {
             <div className="flex items-center gap-2">
               <span className="font-semibold text-sm hidden sm:block">Saraswati VidyaMandir</span>
               <span className="font-bold text-sm sm:hidden">SVM</span>
-              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold flex-shrink-0" style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.2)' }}>
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold flex-shrink-0" style={{ background: 'rgba(200,134,10,0.15)', border: '1px solid rgba(200,134,10,0.3)' }}>
                 Class {session?.class}
               </span>
             </div>
             <p className="text-xs font-semibold truncate mt-0.5" style={{ color: GOLD }}>{session?.studentName}</p>
           </div>
         </div>
-        <button
-          onClick={logout}
-          className="text-xs px-3 py-1.5 rounded-lg font-medium transition flex-shrink-0 border"
-          style={{ background: 'transparent', borderColor: 'rgba(255,255,255,0.2)', color: '#d4b483' }}
-          onMouseEnter={(e) => { e.currentTarget.style.background = GOLD; e.currentTarget.style.borderColor = GOLD; e.currentTarget.style.color = 'white' }}
-          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.2)'; e.currentTarget.style.color = '#d4b483' }}
-        >
-          Logout
-        </button>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <ThemeToggle />
+          <button
+            onClick={logout}
+            className="text-xs px-3 py-1.5 rounded-lg font-medium transition border"
+            style={{ background: 'transparent', borderColor: 'rgba(200,134,10,0.3)', color: 'var(--muted)' }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = GOLD; e.currentTarget.style.borderColor = GOLD; e.currentTarget.style.color = 'white' }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'rgba(200,134,10,0.3)'; e.currentTarget.style.color = 'var(--muted)' }}
+          >
+            Logout
+          </button>
+        </div>
       </nav>
 
       <div className="max-w-6xl mx-auto p-3 sm:p-6 space-y-5">
@@ -437,7 +441,7 @@ export default function StudentDashboard() {
               className="px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold transition"
               style={section === key
                 ? { background: GOLD, color: 'white' }
-                : { background: 'rgba(255,255,255,0.06)', color: '#d4b483', border: '1px solid rgba(200,134,10,0.25)' }
+                : { background: 'rgba(200,134,10,0.12)', color: 'var(--muted)', border: '1px solid rgba(200,134,10,0.25)' }
               }
             >
               {label}
@@ -465,7 +469,7 @@ export default function StudentDashboard() {
         <div className="grid md:grid-cols-3 gap-3">
           {/* Trend line */}
           <div className="md:col-span-2 bg-white rounded-xl shadow p-3 sm:p-4">
-            <h2 className="text-sm font-semibold mb-3 flex items-center gap-2" style={{ color: NAV }}>
+            <h2 className="text-sm font-semibold mb-3 flex items-center gap-2" style={{ color: 'var(--text)' }}>
               <span className="inline-block w-1 h-4 rounded-full" style={{ background: GOLD }} />
               Score Trend (%)
             </h2>
@@ -475,8 +479,8 @@ export default function StudentDashboard() {
                 <ResponsiveContainer width="100%" height={180}>
                   <LineChart data={trendData}>
                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(200,134,10,0.12)" />
-                    <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#9a7040' }} minTickGap={48} interval="preserveStartEnd" />
-                    <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: '#9a7040' }} unit="%" />
+                    <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--faint)' }} minTickGap={48} interval="preserveStartEnd" />
+                    <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: 'var(--faint)' }} unit="%" />
                     <ReferenceLine y={80} stroke="#16a34a" strokeDasharray="4 3" strokeWidth={1.5}
                       label={{ value: '80%', position: 'insideTopRight', fontSize: 10, fill: '#16a34a' }} />
                     <Tooltip formatter={(v) => `${v}%`} />
@@ -496,15 +500,15 @@ export default function StudentDashboard() {
           {/* Subject avg + recent tests */}
           <div className="flex flex-col gap-3">
             <div className="bg-white rounded-xl shadow p-3 sm:p-4">
-              <h2 className="text-sm font-semibold mb-3 flex items-center gap-2" style={{ color: NAV }}>
+              <h2 className="text-sm font-semibold mb-3 flex items-center gap-2" style={{ color: 'var(--text)' }}>
                 <span className="inline-block w-1 h-4 rounded-full" style={{ background: GOLD }} />
                 Subject Avg
               </h2>
               <ResponsiveContainer width="100%" height={100}>
                 <BarChart data={subjectChartData} barSize={32}>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(200,134,10,0.12)" />
-                  <XAxis dataKey="subject" tick={{ fontSize: 11, fill: '#9a7040' }} />
-                  <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: '#9a7040' }} unit="%" />
+                  <XAxis dataKey="subject" tick={{ fontSize: 11, fill: 'var(--faint)' }} />
+                  <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: 'var(--faint)' }} unit="%" />
                   <Tooltip formatter={(v) => `${v}%`} />
                   <Bar dataKey="avg" radius={[6, 6, 0, 0]} fill={GOLD} />
                 </BarChart>
@@ -512,7 +516,7 @@ export default function StudentDashboard() {
             </div>
 
             <div className="bg-white rounded-xl shadow p-3 sm:p-4 flex-1">
-              <h2 className="text-sm font-semibold mb-3 flex items-center gap-2" style={{ color: NAV }}>
+              <h2 className="text-sm font-semibold mb-3 flex items-center gap-2" style={{ color: 'var(--text)' }}>
                 <span className="inline-block w-1 h-4 rounded-full" style={{ background: GOLD }} />
                 Recent Tests
               </h2>
@@ -578,7 +582,7 @@ export default function StudentDashboard() {
                   {['All', 'Science', 'Maths'].map((f) => (
                     <button key={f} onClick={() => setSubjectFilter(f)}
                       className="px-3 py-1 rounded-full text-xs font-medium transition"
-                      style={subjectFilter === f ? { background: GOLD, color: 'white' } : { background: 'rgba(200,134,10,0.12)', color: '#9a7040' }}
+                      style={subjectFilter === f ? { background: GOLD, color: 'white' } : { background: 'rgba(200,134,10,0.12)', color: 'var(--faint)' }}
                     >{f}</button>
                   ))}
                 </div>
@@ -596,7 +600,7 @@ export default function StudentDashboard() {
                       className="px-2.5 py-1 rounded text-xs font-medium transition"
                       style={sortBy === key
                         ? { background: 'rgba(200,134,10,0.22)', color: GOLD, border: '1px solid rgba(200,134,10,0.4)' }
-                        : { background: 'rgba(200,134,10,0.06)', color: '#9a7040', border: '1px solid rgba(200,134,10,0.2)' }}
+                        : { background: 'rgba(200,134,10,0.06)', color: 'var(--faint)', border: '1px solid rgba(200,134,10,0.2)' }}
                     >{label}</button>
                   ))}
                 </div>
@@ -719,7 +723,7 @@ export default function StudentDashboard() {
                 ].map((f) => (
                   <button key={f.key} onClick={() => setAssignmentFilter(f.key)}
                     className="px-3 py-1 rounded-full text-xs font-medium transition"
-                    style={assignmentFilter === f.key ? { background: GOLD, color: 'white' } : { background: 'rgba(200,134,10,0.12)', color: '#9a7040' }}
+                    style={assignmentFilter === f.key ? { background: GOLD, color: 'white' } : { background: 'rgba(200,134,10,0.12)', color: 'var(--faint)' }}
                   >{f.label}</button>
                 ))}
               </div>
@@ -728,7 +732,7 @@ export default function StudentDashboard() {
                 {['All', 'Science', 'Maths'].map((f) => (
                   <button key={f} onClick={() => setAssignmentSubjectFilter(f)}
                     className="px-3 py-1 rounded-full text-xs font-medium transition"
-                    style={assignmentSubjectFilter === f ? { background: GOLD, color: 'white' } : { background: 'rgba(200,134,10,0.12)', color: '#9a7040' }}
+                    style={assignmentSubjectFilter === f ? { background: GOLD, color: 'white' } : { background: 'rgba(200,134,10,0.12)', color: 'var(--faint)' }}
                   >{f}</button>
                 ))}
               </div>
@@ -744,7 +748,7 @@ export default function StudentDashboard() {
                     className="px-2.5 py-1 rounded text-xs font-medium transition"
                     style={assignmentSort === key
                       ? { background: 'rgba(200,134,10,0.22)', color: GOLD, border: '1px solid rgba(200,134,10,0.4)' }
-                      : { background: 'rgba(200,134,10,0.06)', color: '#9a7040', border: '1px solid rgba(200,134,10,0.2)' }}
+                      : { background: 'rgba(200,134,10,0.06)', color: 'var(--faint)', border: '1px solid rgba(200,134,10,0.2)' }}
                   >{label}</button>
                 ))}
               </div>
