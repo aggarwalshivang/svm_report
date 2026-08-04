@@ -197,32 +197,39 @@ export default function TeacherDashboard() {
   const [markingAllSubmittedId, setMarkingAllSubmittedId] = useState(null)
 
   useEffect(() => {
-    async function load() {
-      const [{ data: studs }, { data: wr }, { data: subs }, { data: wfb }] = await Promise.all([
-        supabase.from('student_emails').select('*').order('class').order('student_name'),
-        supabase.from('worksheet_report').select('*').order('deadline'),
-        supabase.from('assignment_submissions').select('*'),
-        supabase.from('worksheet_feedback').select('*'),
-      ])
-      setStudents(studs || [])
-      setWorksheetReport(wr || [])
-      setAssignmentSubmissions(subs || [])
-      setWorksheetFeedback(wfb || [])
-
-      // Supabase caps at 1000 rows by default — page through all score records
+    // Supabase caps every select at 1000 rows by default — page through
+    // `.range()` until a page comes back short. assignment_submissions and
+    // worksheet_feedback both blow past that (the historical CSV imports
+    // alone are 2,500+ rows each), so an unpaginated `.select('*')` silently
+    // truncates them, making the client-side "who submitted"/"who's graded"
+    // matching miss real rows even though the server-side worksheet_report
+    // view (a plain SQL count, not subject to the API row cap) has them.
+    async function fetchAll(table) {
       const PAGE = 1000
       let allRows = []
       let from = 0
       while (true) {
-        const { data, error } = await supabase
-          .from('student_scores')
-          .select('*')
-          .range(from, from + PAGE - 1)
+        const { data, error } = await supabase.from(table).select('*').range(from, from + PAGE - 1)
         if (error || !data || data.length === 0) break
         allRows = allRows.concat(data)
         if (data.length < PAGE) break
         from += PAGE
       }
+      return allRows
+    }
+
+    async function load() {
+      const [{ data: studs }, { data: wr }, subs, wfb, allRows] = await Promise.all([
+        supabase.from('student_emails').select('*').order('class').order('student_name'),
+        supabase.from('worksheet_report').select('*').order('deadline'),
+        fetchAll('assignment_submissions'),
+        fetchAll('worksheet_feedback'),
+        fetchAll('student_scores'),
+      ])
+      setStudents(studs || [])
+      setWorksheetReport(wr || [])
+      setAssignmentSubmissions(subs)
+      setWorksheetFeedback(wfb)
       setAllScores(allRows)
       setLoading(false)
     }
@@ -2217,7 +2224,6 @@ x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
       {confirmDeleteAssignment && (
         <ConfirmDeleteAssignmentModal
           assignment={confirmDeleteAssignment}
-          teacherEmail={session?.email}
           onCancel={() => setConfirmDeleteAssignment(null)}
           onConfirm={() => deleteAssignment(confirmDeleteAssignment.id)}
         />
@@ -2599,57 +2605,13 @@ function ConfirmDeleteStudentModal({ student, teacherEmail, onCancel, onConfirm 
   )
 }
 
-const DELETE_ASSIGNMENT_OTP_PURPOSE = 'delete-assignment'
+function ConfirmDeleteAssignmentModal({ assignment, onCancel, onConfirm }) {
+  const [deleting, setDeleting] = useState(false)
 
-function ConfirmDeleteAssignmentModal({ assignment, teacherEmail, onCancel, onConfirm }) {
-  const [step, setStep] = useState('confirm') // confirm | otp
-  const [code, setCode] = useState('')
-  const [sending, setSending] = useState(false)
-  const [verifying, setVerifying] = useState(false)
-  const [error, setError] = useState('')
-  const [cooldown, setCooldown] = useState(0)
-  const cooldownRef = useRef(null)
-
-  useEffect(() => () => clearInterval(cooldownRef.current), [])
-
-  function startCooldown() {
-    setCooldown(OTP_RESEND_COOLDOWN)
-    clearInterval(cooldownRef.current)
-    cooldownRef.current = setInterval(() => {
-      setCooldown((c) => {
-        if (c <= 1) { clearInterval(cooldownRef.current); return 0 }
-        return c - 1
-      })
-    }, 1000)
-  }
-
-  async function sendCode() {
-    setError('')
-    setSending(true)
-    const { data, error: fnErr } = await supabase.functions.invoke('send-action-otp', {
-      body: { purpose: DELETE_ASSIGNMENT_OTP_PURPOSE },
-    })
-    setSending(false)
-    if (fnErr || data?.ok === false) {
-      setError(data?.error || 'Could not send code. Please try again.')
-      return
-    }
-    startCooldown()
-    setStep('otp')
-  }
-
-  async function verifyAndConfirm() {
-    setError('')
-    setVerifying(true)
-    const { data, error: fnErr } = await supabase.functions.invoke('verify-action-otp', {
-      body: { code: code.trim(), purpose: DELETE_ASSIGNMENT_OTP_PURPOSE },
-    })
-    setVerifying(false)
-    if (fnErr || data?.ok === false) {
-      setError(data?.error || 'Invalid or expired code.')
-      return
-    }
-    onConfirm()
+  async function handleConfirm() {
+    setDeleting(true)
+    await onConfirm()
+    setDeleting(false)
   }
 
   return (
@@ -2663,72 +2625,21 @@ function ConfirmDeleteAssignmentModal({ assignment, teacherEmail, onCancel, onCo
           This permanently removes the worksheet and its link for every student in Class {assignment.class}, including everyone's submissions for it. This cannot be undone.
         </p>
 
-        {step === 'confirm' ? (
-          <>
-            {error && (
-              <div className="rounded-lg px-3 py-2 text-xs mb-4 bg-red-50 border border-red-200 text-red-600">{error}</div>
-            )}
-            <div className="flex gap-2 justify-end">
-              <button
-                onClick={onCancel}
-                className="text-sm font-medium px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100 transition"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={sendCode}
-                disabled={sending}
-                className="text-sm font-semibold px-4 py-2 rounded-lg text-white bg-red-500 hover:bg-red-600 transition disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                {sending ? 'Sending code…' : 'Send Confirmation Code'}
-              </button>
-            </div>
-          </>
-        ) : (
-          <>
-            <p className="text-xs text-gray-500 mb-2">
-              Enter the 6-digit code sent to <span className="font-medium text-gray-700">{teacherEmail}</span> to permanently remove this worksheet:
-            </p>
-            <input
-              autoFocus
-              type="text"
-              inputMode="numeric"
-              pattern="[0-9]{6}"
-              maxLength={6}
-              value={code}
-              onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
-              onKeyDown={(e) => { if (e.key === 'Enter' && code.length === 6) verifyAndConfirm() }}
-              placeholder="123456"
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-2 tracking-[0.3em] text-center focus:outline-none focus:ring-2 focus:ring-red-200"
-            />
-            <button
-              type="button"
-              disabled={cooldown > 0 || sending}
-              onClick={sendCode}
-              className="text-xs font-medium mb-4 disabled:text-gray-400 text-red-600"
-            >
-              {cooldown > 0 ? `Resend code in ${cooldown}s` : 'Resend code'}
-            </button>
-            {error && (
-              <div className="rounded-lg px-3 py-2 text-xs mb-4 bg-red-50 border border-red-200 text-red-600">{error}</div>
-            )}
-            <div className="flex gap-2 justify-end">
-              <button
-                onClick={onCancel}
-                className="text-sm font-medium px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100 transition"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={verifyAndConfirm}
-                disabled={code.length !== 6 || verifying}
-                className="text-sm font-semibold px-4 py-2 rounded-lg text-white bg-red-500 hover:bg-red-600 transition disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                {verifying ? 'Verifying…' : 'Remove Worksheet'}
-              </button>
-            </div>
-          </>
-        )}
+        <div className="flex gap-2 justify-end">
+          <button
+            onClick={onCancel}
+            className="text-sm font-medium px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100 transition"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleConfirm}
+            disabled={deleting}
+            className="text-sm font-semibold px-4 py-2 rounded-lg text-white bg-red-500 hover:bg-red-600 transition disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {deleting ? 'Removing…' : 'Remove Worksheet'}
+          </button>
+        </div>
       </div>
     </div>
   )
