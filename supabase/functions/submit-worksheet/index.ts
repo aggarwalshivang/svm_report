@@ -87,7 +87,7 @@ Deno.serve(async (req) => {
     const form = await req.formData()
     const file = form.get('file')
     if (!(file instanceof File)) throw new Error('A worksheet PDF file is required')
-    if (file.type && file.type !== 'application/pdf') throw new Error('Only PDF files are accepted')
+    if (file.type !== 'application/pdf') throw new Error('Only PDF files are accepted')
     if (file.size > MAX_FILE_BYTES) throw new Error('File must be under 20 MB')
 
     const assignmentId = String(form.get('assignment_id') ?? '')

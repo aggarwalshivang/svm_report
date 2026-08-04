@@ -216,7 +216,7 @@ export default function StudentDashboard() {
     load()
   }, [session?.studentId])
 
-  // Re-fetched (not run inside an effect) after a card's Turn in/Resubmit succeeds.
+  // Re-fetched (not run inside an effect) after a card's Submit succeeds.
   async function loadSubmissions() {
     if (!session?.studentId) return
     const { data } = await supabase
@@ -703,7 +703,7 @@ export default function StudentDashboard() {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <StatCard label="Missing"  value={missingCount}  sub={missingCount ? 'Overdue — submit now' : 'All caught up'} type="red" />
               <StatCard label="Upcoming" value={upcomingCount} sub="Due before deadline" type="gold" />
-              <StatCard label="Completed" value={assignmentsWithStatus.filter((a) => a.status.key === 'completed').length} sub="Turned in" type="green" />
+              <StatCard label="Completed" value={assignmentsWithStatus.filter((a) => a.status.key === 'completed').length} sub="Submitted" type="green" />
               <StatCard label="Checked by Teacher" value={assignmentsWithStatus.filter((a) => a.feedback).length} sub="Feedback received" type="brown" />
             </div>
 
@@ -862,7 +862,12 @@ function AssignmentCard({ a, session, onSubmitted }) {
   const [file, setFile] = useState(null)
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
-  const canTurnIn = a.status.key !== 'completed' && a.status.key !== 'closed'
+  // Not status.key !== 'completed' — that flag also flips true the moment a
+  // submission/feedback row exists at all, which would make this permanently
+  // false (and the "Resubmit" label below unreachable) after a student's
+  // very first turn-in. Only a teacher explicitly closing/completing the
+  // worksheet should block further submissions.
+  const canTurnIn = !a.completed && !a.submissions_closed
 
   function pickFile(e) {
     const f = e.target.files?.[0] || null
@@ -947,7 +952,7 @@ function AssignmentCard({ a, session, onSubmitted }) {
 
       {a.submission && (
         <p className="text-xs text-gray-500">
-          Turned in <span className="font-medium text-gray-700">{a.submission.file_name}</span> · {formatIST(a.submission.submitted_at)}
+          Submitted <span className="font-medium text-gray-700">{a.submission.file_name}</span> · {formatIST(a.submission.submitted_at)}
         </p>
       )}
 
@@ -969,7 +974,11 @@ function AssignmentCard({ a, session, onSubmitted }) {
             className="text-xs font-semibold px-3 py-1.5 rounded-lg text-white transition disabled:opacity-40"
             style={{ background: GOLD }}
           >
-            {uploading ? 'Uploading…' : a.submission ? 'Resubmit' : a.status.key === 'missing' ? 'Turn in late' : 'Turn in'}
+            {uploading
+              ? 'Uploading…'
+              : (a.deadline && new Date(a.deadline) < new Date())
+                ? 'Submit late'
+                : 'Submit'}
           </button>
         </div>
       )}

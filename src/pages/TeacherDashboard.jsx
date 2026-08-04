@@ -1685,7 +1685,7 @@ x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
                             </button>
                             <button
                               onClick={() => toggleSubmissionsClosed(a)}
-                              title={a.submissions_closed ? 'Students can no longer turn in this worksheet' : 'Stop accepting new submissions, even before the deadline'}
+                              title={a.submissions_closed ? 'Students can no longer submit this worksheet' : 'Stop accepting new submissions, even before the deadline'}
                               className="text-xs font-semibold px-2.5 py-1 rounded-full transition"
                               style={a.submissions_closed
                                 ? { background: 'rgba(239,68,68,0.12)', color: '#dc2626' }
