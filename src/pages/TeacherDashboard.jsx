@@ -180,8 +180,13 @@ export default function TeacherDashboard() {
   const [savingPhone, setSavingPhone] = useState(false)
   const [creatingLoginId, setCreatingLoginId] = useState(null)
 
-  // Assignments tab state
-  const [assignments, setAssignments] = useState([])
+  // Assignments tab state — worksheetReport is the public.worksheet_report
+  // table (one row per worksheet, already carrying submission/feedback
+  // counts computed server-side by triggers); assignmentSubmissions/
+  // worksheetFeedback are still fetched for the per-worksheet expanded
+  // detail view below, which needs per-student names and feedback text the
+  // aggregate table doesn't store.
+  const [worksheetReport, setWorksheetReport] = useState([])
   const [assignmentSubmissions, setAssignmentSubmissions] = useState([])
   const [worksheetFeedback, setWorksheetFeedback] = useState([])
   const [deletingAssignmentId, setDeletingAssignmentId] = useState(null)
@@ -193,14 +198,14 @@ export default function TeacherDashboard() {
 
   useEffect(() => {
     async function load() {
-      const [{ data: studs }, { data: asgn }, { data: subs }, { data: wfb }] = await Promise.all([
+      const [{ data: studs }, { data: wr }, { data: subs }, { data: wfb }] = await Promise.all([
         supabase.from('student_emails').select('*').order('class').order('student_name'),
-        supabase.from('assignments').select('*').order('deadline'),
+        supabase.from('worksheet_report').select('*').order('deadline'),
         supabase.from('assignment_submissions').select('*'),
         supabase.from('worksheet_feedback').select('*'),
       ])
       setStudents(studs || [])
-      setAssignments(asgn || [])
+      setWorksheetReport(wr || [])
       setAssignmentSubmissions(subs || [])
       setWorksheetFeedback(wfb || [])
 
@@ -335,7 +340,7 @@ export default function TeacherDashboard() {
 
   const filteredTests = uniqueTests.filter((t) => classFilter === 'All' || String(t.class) === classFilter)
 
-  const filteredAssignments = assignments
+  const filteredAssignments = worksheetReport
     .filter((a) => String(a.class) === assignmentClass)
     .filter((a) => !search || a.title.toLowerCase().includes(search.toLowerCase()) || a.subject.toLowerCase().includes(search.toLowerCase()))
     .sort((a, b) => {
@@ -371,7 +376,7 @@ export default function TeacherDashboard() {
       }
     })
 
-    const perAssignment = assignments
+    const perAssignment = worksheetReport
       .map((a) => {
         const roster = rosterFor(String(a.class))
         const submittedIds = new Set(
@@ -426,16 +431,19 @@ export default function TeacherDashboard() {
       })
       .sort((a, b) => new Date(b.assignment.deadline) - new Date(a.assignment.deadline))
 
+    // Straight from worksheet_report's own submitted_pct (server-computed
+    // from real assignment_submissions rows), not the fuzzy-match rate above
+    // — this is the number the "Worksheet Analysis" cards show.
     const perClass = ['9', '10'].map((cls) => {
-      const clsRows = perAssignment.filter((p) => String(p.assignment.class) === cls)
+      const clsRows = worksheetReport.filter((a) => String(a.class) === cls)
       const avgRate = clsRows.length
-        ? Math.round(clsRows.reduce((sum, p) => sum + p.rate, 0) / clsRows.length)
+        ? Math.round(clsRows.reduce((sum, a) => sum + Number(a.submitted_pct), 0) / clsRows.length)
         : 0
       return { class: cls, avgRate, assignmentCount: clsRows.length, rosterSize: rosterFor(cls).length }
     })
 
     return { perAssignment, perClass }
-  }, [assignments, assignmentSubmissions, worksheetFeedback, studentSummary])
+  }, [worksheetReport, assignmentSubmissions, worksheetFeedback, studentSummary])
 
   const analysisByAssignmentId = useMemo(
     () => Object.fromEntries(assignmentAnalysis.perAssignment.map((p) => [p.assignment.id, p])),
@@ -698,20 +706,20 @@ export default function TeacherDashboard() {
 
   async function toggleAssignmentCompleted(assignment) {
     const completed = !assignment.completed
-    setAssignments((prev) => prev.map((a) => (a.id === assignment.id ? { ...a, completed } : a)))
+    setWorksheetReport((prev) => prev.map((a) => (a.id === assignment.id ? { ...a, completed } : a)))
     const { data, error } = await supabase.from('assignments').update({ completed }).eq('id', assignment.id).select('id')
     if (error || !data || data.length === 0) {
-      setAssignments((prev) => prev.map((a) => (a.id === assignment.id ? { ...a, completed: !completed } : a)))
+      setWorksheetReport((prev) => prev.map((a) => (a.id === assignment.id ? { ...a, completed: !completed } : a)))
       alert(`Failed to update worksheet: ${error?.message || 'blocked by Supabase (RLS)'}`)
     }
   }
 
   async function toggleSubmissionsClosed(assignment) {
     const submissions_closed = !assignment.submissions_closed
-    setAssignments((prev) => prev.map((a) => (a.id === assignment.id ? { ...a, submissions_closed } : a)))
+    setWorksheetReport((prev) => prev.map((a) => (a.id === assignment.id ? { ...a, submissions_closed } : a)))
     const { data, error } = await supabase.from('assignments').update({ submissions_closed }).eq('id', assignment.id).select('id')
     if (error || !data || data.length === 0) {
-      setAssignments((prev) => prev.map((a) => (a.id === assignment.id ? { ...a, submissions_closed: !submissions_closed } : a)))
+      setWorksheetReport((prev) => prev.map((a) => (a.id === assignment.id ? { ...a, submissions_closed: !submissions_closed } : a)))
       alert(`Failed to update worksheet: ${error?.message || 'blocked by Supabase (RLS)'}`)
     }
   }
@@ -738,6 +746,13 @@ export default function TeacherDashboard() {
       alert(`Failed to mark submissions: ${error?.message || 'blocked by Supabase (RLS)'}`)
     } else {
       setAssignmentSubmissions((prev) => [...prev, ...data])
+      // The DB trigger already recomputed worksheet_report's row server-side;
+      // patch the local copy the same way so the header stats update
+      // immediately instead of waiting for a reload.
+      setWorksheetReport((prev) => prev.map((a) => (a.id === p.assignment.id
+        ? { ...a, submitted_count: a.total_students, missing_count: 0, submitted_pct: a.total_students ? 100 : 0 }
+        : a
+      )))
     }
     setMarkingAllSubmittedId(null)
   }
@@ -751,7 +766,7 @@ export default function TeacherDashboard() {
     } else if (!data || data.length === 0) {
       alert("Delete was blocked by Supabase (likely a Row Level Security policy) — the worksheet was not removed.")
     } else {
-      setAssignments((prev) => prev.filter((a) => a.id !== id))
+      setWorksheetReport((prev) => prev.filter((a) => a.id !== id))
     }
     setDeletingAssignmentId(null)
   }
@@ -1635,7 +1650,8 @@ x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
                     {filteredAssignments.map((a) => {
                       const p = analysisByAssignmentId[a.id]
                       const expanded = expandedAnalysisId === a.id
-                      const rateColor = p && (p.rate >= 80 ? '#16a34a' : p.rate >= 50 ? GOLD : '#dc2626')
+                      const rate = Number(a.submitted_pct)
+                      const rateColor = rate >= 80 ? '#16a34a' : rate >= 50 ? GOLD : '#dc2626'
                       return (
                       <Fragment key={a.id}>
                       <tr className={a.completed ? 'opacity-60' : ''}>
@@ -1658,18 +1674,16 @@ x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
                         </td>
                         <td className="px-3 sm:px-5 py-3 align-top whitespace-nowrap text-gray-700 text-xs">{formatIST(a.deadline)}</td>
                         <td className="px-3 sm:px-5 py-3 align-top text-center">
-                          {p ? (
-                            <button
-                              onClick={() => setExpandedAnalysisId(expanded ? null : a.id)}
-                              className="w-full text-center"
-                            >
-                              <div className="text-xs font-bold" style={{ color: rateColor }}>{p.submittedCount}/{p.total} · {p.rate}%</div>
-                              {p.submittedCount > 0 && (
-                                <div className="text-[10px] text-gray-400">{p.gradedCount}/{p.submittedCount} graded</div>
-                              )}
-                              <div className="text-gray-300 text-[10px]">{expanded ? '▲' : '▼'}</div>
-                            </button>
-                          ) : <span className="text-xs text-gray-300">—</span>}
+                          <button
+                            onClick={() => setExpandedAnalysisId(expanded ? null : a.id)}
+                            className="w-full text-center"
+                          >
+                            <div className="text-xs font-bold" style={{ color: rateColor }}>{a.submitted_count}/{a.total_students} · {rate}%</div>
+                            {a.submitted_count > 0 && (
+                              <div className="text-[10px] text-gray-400">{a.feedback_count}/{a.submitted_count} graded</div>
+                            )}
+                            <div className="text-gray-300 text-[10px]">{expanded ? '▲' : '▼'}</div>
+                          </button>
                         </td>
                         <td className="px-3 sm:px-5 py-3 align-top text-center">
                           <div className="flex flex-col items-stretch gap-1.5">
@@ -2203,6 +2217,7 @@ x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
       {confirmDeleteAssignment && (
         <ConfirmDeleteAssignmentModal
           assignment={confirmDeleteAssignment}
+          teacherEmail={session?.email}
           onCancel={() => setConfirmDeleteAssignment(null)}
           onConfirm={() => deleteAssignment(confirmDeleteAssignment.id)}
         />
@@ -2584,7 +2599,59 @@ function ConfirmDeleteStudentModal({ student, teacherEmail, onCancel, onConfirm 
   )
 }
 
-function ConfirmDeleteAssignmentModal({ assignment, onCancel, onConfirm }) {
+const DELETE_ASSIGNMENT_OTP_PURPOSE = 'delete-assignment'
+
+function ConfirmDeleteAssignmentModal({ assignment, teacherEmail, onCancel, onConfirm }) {
+  const [step, setStep] = useState('confirm') // confirm | otp
+  const [code, setCode] = useState('')
+  const [sending, setSending] = useState(false)
+  const [verifying, setVerifying] = useState(false)
+  const [error, setError] = useState('')
+  const [cooldown, setCooldown] = useState(0)
+  const cooldownRef = useRef(null)
+
+  useEffect(() => () => clearInterval(cooldownRef.current), [])
+
+  function startCooldown() {
+    setCooldown(OTP_RESEND_COOLDOWN)
+    clearInterval(cooldownRef.current)
+    cooldownRef.current = setInterval(() => {
+      setCooldown((c) => {
+        if (c <= 1) { clearInterval(cooldownRef.current); return 0 }
+        return c - 1
+      })
+    }, 1000)
+  }
+
+  async function sendCode() {
+    setError('')
+    setSending(true)
+    const { data, error: fnErr } = await supabase.functions.invoke('send-action-otp', {
+      body: { purpose: DELETE_ASSIGNMENT_OTP_PURPOSE },
+    })
+    setSending(false)
+    if (fnErr || data?.ok === false) {
+      setError(data?.error || 'Could not send code. Please try again.')
+      return
+    }
+    startCooldown()
+    setStep('otp')
+  }
+
+  async function verifyAndConfirm() {
+    setError('')
+    setVerifying(true)
+    const { data, error: fnErr } = await supabase.functions.invoke('verify-action-otp', {
+      body: { code: code.trim(), purpose: DELETE_ASSIGNMENT_OTP_PURPOSE },
+    })
+    setVerifying(false)
+    if (fnErr || data?.ok === false) {
+      setError(data?.error || 'Invalid or expired code.')
+      return
+    }
+    onConfirm()
+  }
+
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onCancel}>
       <div
@@ -2593,22 +2660,75 @@ function ConfirmDeleteAssignmentModal({ assignment, onCancel, onConfirm }) {
       >
         <h3 className="text-lg font-bold text-gray-800 mb-1">Remove "{assignment.title}"?</h3>
         <p className="text-sm text-gray-500 mb-4">
-          This permanently removes the worksheet and its link for every student in Class {assignment.class}. This cannot be undone.
+          This permanently removes the worksheet and its link for every student in Class {assignment.class}, including everyone's submissions for it. This cannot be undone.
         </p>
-        <div className="flex gap-2 justify-end">
-          <button
-            onClick={onCancel}
-            className="text-sm font-medium px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100 transition"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={onConfirm}
-            className="text-sm font-semibold px-4 py-2 rounded-lg text-white bg-red-500 hover:bg-red-600 transition"
-          >
-            Remove Worksheet
-          </button>
-        </div>
+
+        {step === 'confirm' ? (
+          <>
+            {error && (
+              <div className="rounded-lg px-3 py-2 text-xs mb-4 bg-red-50 border border-red-200 text-red-600">{error}</div>
+            )}
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={onCancel}
+                className="text-sm font-medium px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={sendCode}
+                disabled={sending}
+                className="text-sm font-semibold px-4 py-2 rounded-lg text-white bg-red-500 hover:bg-red-600 transition disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {sending ? 'Sending code…' : 'Send Confirmation Code'}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="text-xs text-gray-500 mb-2">
+              Enter the 6-digit code sent to <span className="font-medium text-gray-700">{teacherEmail}</span> to permanently remove this worksheet:
+            </p>
+            <input
+              autoFocus
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]{6}"
+              maxLength={6}
+              value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+              onKeyDown={(e) => { if (e.key === 'Enter' && code.length === 6) verifyAndConfirm() }}
+              placeholder="123456"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-2 tracking-[0.3em] text-center focus:outline-none focus:ring-2 focus:ring-red-200"
+            />
+            <button
+              type="button"
+              disabled={cooldown > 0 || sending}
+              onClick={sendCode}
+              className="text-xs font-medium mb-4 disabled:text-gray-400 text-red-600"
+            >
+              {cooldown > 0 ? `Resend code in ${cooldown}s` : 'Resend code'}
+            </button>
+            {error && (
+              <div className="rounded-lg px-3 py-2 text-xs mb-4 bg-red-50 border border-red-200 text-red-600">{error}</div>
+            )}
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={onCancel}
+                className="text-sm font-medium px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={verifyAndConfirm}
+                disabled={code.length !== 6 || verifying}
+                className="text-sm font-semibold px-4 py-2 rounded-lg text-white bg-red-500 hover:bg-red-600 transition disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {verifying ? 'Verifying…' : 'Remove Worksheet'}
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   )
