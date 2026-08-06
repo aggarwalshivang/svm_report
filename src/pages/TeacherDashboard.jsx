@@ -6,6 +6,10 @@ import {
 } from 'recharts'
 import { supabase } from '../lib/supabase'
 import { ThemeToggle } from '../lib/theme.jsx'
+import {
+  computeSubmissionPerformance, aggregateChapterStats, aggregateSubjectStats,
+  topRecurringIssues, classifyChapters, buildSuggestion,
+} from '../lib/worksheetAnalysis'
 
 const GOLD = 'var(--gold)'
 const NAV  = 'var(--nav)'
@@ -174,6 +178,11 @@ export default function TeacherDashboard() {
   // Chapter analysis sort + filter state
   const [chapterSort, setChapterSort] = useState({ col: 'avg', dir: 'desc' })
   const [chapterSubject, setChapterSubject] = useState('All')
+
+  // Worksheet performance subject filter — kept independent from
+  // chapterSubject above so switching between the Tests "Analysis" tab and
+  // this "Worksheet Performance" tab doesn't cross-pollinate.
+  const [wsChapterSubject, setWsChapterSubject] = useState('All')
 
   // Manage tab state
   const [manageMode, setManageMode] = useState('list') // 'list' | 'add'
@@ -475,6 +484,30 @@ export default function TeacherDashboard() {
     () => Object.fromEntries(assignmentAnalysis.perAssignment.map((p) => [p.assignment.id, p])),
     [assignmentAnalysis]
   )
+
+  // Worksheet performance analysis — derived by text-mining assignment_feedback
+  // (worksheets carry no marks/chapter tag of their own). Built on top of the
+  // {student, feedback} pairs assignmentAnalysis already matched above, so
+  // this doesn't redo the assignment<->feedback fuzzy matching.
+  const worksheetSubmissionPerf = useMemo(() => {
+    const rows = []
+    assignmentAnalysis.perAssignment.forEach(({ assignment, submittedWithFeedback }) => {
+      submittedWithFeedback.forEach(({ student, feedback }) => {
+        const row = computeSubmissionPerformance(assignment, feedback, student)
+        if (row) rows.push({ ...row, class: assignment.class })
+      })
+    })
+    return rows
+  }, [assignmentAnalysis])
+
+  const worksheetPerfInScope = useMemo(
+    () => (classFilter === 'All' ? worksheetSubmissionPerf : worksheetSubmissionPerf.filter((r) => String(r.class) === classFilter)),
+    [worksheetSubmissionPerf, classFilter]
+  )
+
+  const worksheetChapterStats = useMemo(() => aggregateChapterStats(worksheetPerfInScope), [worksheetPerfInScope])
+  const worksheetSubjectStats = useMemo(() => aggregateSubjectStats(worksheetPerfInScope), [worksheetPerfInScope])
+  const worksheetRecurringIssues = useMemo(() => topRecurringIssues(worksheetPerfInScope), [worksheetPerfInScope])
 
   const topPctThreshold = Number(topPctFilter) / 100
 
@@ -963,6 +996,7 @@ export default function TeacherDashboard() {
                 { k: 'tests',    label: 'Tests',    icon: '📋' },
                 { k: 'toppers',  label: 'Toppers',  icon: '🏆' },
                 { k: 'assignments', label: 'Worksheets', icon: '📌' },
+                { k: 'worksheetInsights', label: 'Worksheet Performance', icon: '📈' },
                 { k: 'manage',   label: 'Other',    icon: '⚙️' },
               ].map(({ k, label, icon }) => (
                 <button
@@ -1232,6 +1266,150 @@ export default function TeacherDashboard() {
                   )
                 })
               })()}
+            </div>
+          )
+        })()}
+
+        {/* ── Worksheet Performance tab ── */}
+        {view === 'worksheetInsights' && (() => {
+          const { strong: strongWs, moderate: moderateWs, weak: weakWs } = classifyChapters(worksheetChapterStats)
+          const sciWs  = worksheetSubjectStats.find((s) => s.subject === 'Science')
+          const mathWs = worksheetSubjectStats.find((s) => s.subject === 'Maths')
+          const sciWsChapters  = worksheetChapterStats.filter((t) => t.subject === 'Science')
+          const mathWsChapters = worksheetChapterStats.filter((t) => t.subject === 'Maths')
+
+          function issuesFor(chapterStat) {
+            return topRecurringIssues(
+              worksheetPerfInScope.filter((r) => r.subject === chapterStat.subject && r.chapter === chapterStat.topic),
+              { limit: 1 }
+            )
+          }
+
+          if (worksheetChapterStats.length === 0) {
+            return (
+              <div className="bg-white rounded-xl shadow p-8 text-center">
+                <p className="text-sm text-gray-500">No graded worksheet feedback with a clear signal yet.</p>
+                <p className="text-xs text-gray-400 mt-1">This fills in as worksheets get graded and the AI feedback mentions specific strengths or mistakes.</p>
+              </div>
+            )
+          }
+
+          return (
+            <div className="space-y-5">
+              {/* Subject-wise summary */}
+              <div className="grid grid-cols-2 gap-3">
+                <MiniStat label="Science — Worksheet Avg" value={sciWs ? `${sciWs.avg}%` : '—'} highlight />
+                <MiniStat label="Maths — Worksheet Avg"   value={mathWs ? `${mathWs.avg}%` : '—'} highlight />
+              </div>
+
+              {/* Charts */}
+              <div className="grid md:grid-cols-2 gap-4">
+                {[{ label: 'Science', color: '#16a34a', data: sciWsChapters }, { label: 'Maths', color: '#c8860a', data: mathWsChapters }].map(({ label, color, data }) =>
+                  data.length > 0 && (
+                    <div key={label} className="bg-white rounded-xl shadow p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <p className="text-sm font-semibold flex items-center gap-1.5" style={{ color }}>
+                          <span className="inline-block w-1 h-4 rounded-full flex-shrink-0" style={{ background: color }} />
+                          {label} — Worksheet Chapter Analysis
+                        </p>
+                        <div className="flex items-center gap-2 text-[10px] text-gray-400 flex-wrap">
+                          <span><span className="inline-block w-3 h-2 rounded-sm mr-1" style={{ background: '#16a34a' }} />≥80%</span>
+                          <span><span className="inline-block w-3 h-2 rounded-sm mr-1" style={{ background: '#c8860a' }} />60–79%</span>
+                          <span><span className="inline-block w-3 h-2 rounded-sm mr-1" style={{ background: '#ef4444' }} />&lt;60%</span>
+                        </div>
+                      </div>
+                      <ChapterBarChart topics={data} />
+                    </div>
+                  )
+                )}
+              </div>
+
+              {/* Filter bar */}
+              <div className="bg-white rounded-xl shadow px-4 py-2.5 flex flex-wrap items-center gap-3">
+                <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Subject</span>
+                <div className="flex gap-1">
+                  {['All', 'Maths', 'Science'].map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => setWsChapterSubject(s)}
+                      className="px-3 py-1 rounded-full text-xs font-semibold transition-all"
+                      style={wsChapterSubject === s
+                        ? { background: GOLD, color: '#fff' }
+                        : { background: 'rgba(200,134,10,0.1)', color: 'var(--faint)' }
+                      }
+                    >{s}</button>
+                  ))}
+                </div>
+                <span className="text-xs text-gray-400 ml-auto">
+                  {wsChapterSubject === 'All'
+                    ? `${worksheetChapterStats.length} chapters total`
+                    : `${worksheetChapterStats.filter((t) => t.subject === wsChapterSubject).length} ${wsChapterSubject} chapters`}
+                </span>
+              </div>
+
+              {/* Strong / Moderate / Weak tables */}
+              {(() => {
+                function inSubject(data) {
+                  return wsChapterSubject === 'All' ? data : data.filter((t) => t.subject === wsChapterSubject)
+                }
+                return [
+                  { label: '🏆 Strong Chapters',  data: inSubject(strongWs),   type: 'strong',   empty: 'No chapters above 80% yet.' },
+                  { label: '🟡 Moderate Chapters', data: inSubject(moderateWs), type: 'moderate', empty: 'No moderate chapters.' },
+                  { label: '⚠️ Weak Chapters',     data: inSubject(weakWs),     type: 'weak',     empty: 'No weak chapters — great work!' },
+                ].map(({ label, data, type, empty }) => {
+                  const hdrBg = type === 'strong' ? 'rgba(22,163,74,0.12)' : type === 'moderate' ? 'rgba(200,134,10,0.12)' : 'rgba(239,68,68,0.12)'
+                  const hdrColor = type === 'strong' ? '#4ade80' : type === 'moderate' ? '#c8860a' : '#f87171'
+                  return (
+                    <div key={type} className="bg-white rounded-xl shadow overflow-hidden">
+                      <div className="px-5 py-3 border-b" style={{ background: hdrBg }}>
+                        <p className="text-sm font-semibold" style={{ color: hdrColor }}>{label} ({data.length})</p>
+                      </div>
+                      {data.length === 0
+                        ? <p className="text-sm text-gray-400 py-6 text-center">{empty}</p>
+                        : <div className="p-3"><ModalTopicTable topics={data} type={type} countLabel="Worksheets" /></div>
+                      }
+                    </div>
+                  )
+                })
+              })()}
+
+              {/* Recurring mistake patterns */}
+              <div className="bg-white rounded-xl shadow p-4">
+                <p className="text-sm font-semibold text-gray-700 mb-3">⚠️ Recurring Mistake Patterns</p>
+                {worksheetRecurringIssues.length === 0
+                  ? <p className="text-xs text-gray-400">No clear recurring mistake pattern detected yet.</p>
+                  : (
+                    <div className="space-y-2">
+                      {worksheetRecurringIssues.map((issue) => (
+                        <div key={issue.key} className="flex items-start justify-between gap-3 border border-gray-100 rounded-lg px-3 py-2">
+                          <div className="min-w-0">
+                            <p className="text-xs font-semibold text-gray-700">{issue.label}</p>
+                            <p className="text-[11px] text-gray-400 mt-0.5 truncate">"{issue.example}"</p>
+                          </div>
+                          <span className="text-xs font-bold flex-shrink-0" style={{ color: GOLD }}>{issue.count}×</span>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                }
+              </div>
+
+              {/* Suggested revision plan */}
+              <div className="bg-white rounded-xl shadow p-4">
+                <p className="text-sm font-semibold text-gray-700 mb-3">💡 Suggested Revision Plan</p>
+                {[...weakWs, ...moderateWs].length === 0
+                  ? <p className="text-xs text-gray-400">No chapters need revision right now — nice work.</p>
+                  : (
+                    <div className="space-y-2">
+                      {[...weakWs, ...moderateWs].map((c) => (
+                        <div key={`${c.subject}-${c.topic}`} className="text-xs border border-gray-100 rounded-lg px-3 py-2 bg-gray-50">
+                          {buildSuggestion(c, issuesFor(c), { audience: 'teacher' })}
+                        </div>
+                      ))}
+                    </div>
+                  )
+                }
+              </div>
             </div>
           )
         })()}
@@ -3298,7 +3476,7 @@ function DeltaBadge({ delta }) {
   )
 }
 
-function ModalTopicTable({ topics, type }) {
+function ModalTopicTable({ topics, type, countLabel = 'Tests' }) {
   const cfg = {
     strong:   { border: 'rgba(22,163,74,0.25)',  bg: 'rgba(22,163,74,0.1)',   hover: 'hover:bg-green-50',  color: 'text-green-400',  bar: '#22c55e' },
     moderate: { border: 'rgba(200,134,10,0.3)',  bg: 'rgba(200,134,10,0.1)',  hover: 'hover:bg-amber-50',  color: 'text-amber-400',  bar: '#c8860a' },
@@ -3311,7 +3489,7 @@ function ModalTopicTable({ topics, type }) {
           <tr className="text-left text-xs text-gray-500 uppercase" style={{ background: cfg.bg }}>
             <th className="px-4 py-2">Chapter / Topic</th>
             <th className="px-4 py-2">Subject</th>
-            <th className="px-4 py-2 text-center">Tests</th>
+            <th className="px-4 py-2 text-center">{countLabel}</th>
             <th className="px-4 py-2 text-center">Avg %</th>
             <th className="px-4 py-2 text-center">Best</th>
             <th className="px-4 py-2 text-center">Worst</th>

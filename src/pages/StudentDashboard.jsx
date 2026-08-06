@@ -2,10 +2,14 @@ import { useEffect, useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine,
-  BarChart, Bar, ResponsiveContainer,
+  BarChart, Bar, ResponsiveContainer, ComposedChart, Cell,
 } from 'recharts'
 import { supabase } from '../lib/supabase'
 import { ThemeToggle } from '../lib/theme.jsx'
+import {
+  computeSubmissionPerformance, aggregateChapterStats, aggregateSubjectStats,
+  topRecurringIssues, classifyChapters, buildSuggestion,
+} from '../lib/worksheetAnalysis'
 
 const GOLD  = 'var(--gold)'
 const NAV   = 'var(--nav)'
@@ -99,6 +103,7 @@ export default function StudentDashboard() {
   const [submissions, setSubmissions] = useState([]) // this student's assignment_submissions rows
   const [worksheetFeedback, setWorksheetFeedback] = useState([]) // this student's worksheet_feedback rows
   const [section, setSection] = useState('report') // report | assignments
+  const [assignmentView, setAssignmentView] = useState('list') // list | performance
   const [assignmentFilter, setAssignmentFilter] = useState('all') // all | assigned | missing | submitted | completed
   const [assignmentSort, setAssignmentSort] = useState('deadline-desc') // deadline-asc | deadline-desc | subject
   const [assignmentSubjectFilter, setAssignmentSubjectFilter] = useState('All') // All | Maths | Science
@@ -275,6 +280,22 @@ export default function StudentDashboard() {
     })
     return map
   }, [assignments, worksheetFeedback])
+
+  // Worksheet performance analysis — derived by text-mining assignment_feedback
+  // (worksheets carry no marks/chapter tag of their own), built on top of the
+  // assignment<->feedback matches above.
+  const worksheetSubmissionPerf = useMemo(() => {
+    const rows = []
+    assignments.forEach((a) => {
+      const row = computeSubmissionPerformance(a, feedbackByAssignmentId[a.id])
+      if (row) rows.push(row)
+    })
+    return rows
+  }, [assignments, feedbackByAssignmentId])
+
+  const worksheetChapterStats = useMemo(() => aggregateChapterStats(worksheetSubmissionPerf), [worksheetSubmissionPerf])
+  const worksheetSubjectStats = useMemo(() => aggregateSubjectStats(worksheetSubmissionPerf), [worksheetSubmissionPerf])
+  const worksheetRecurringIssues = useMemo(() => topRecurringIssues(worksheetSubmissionPerf), [worksheetSubmissionPerf])
 
   const assignmentsWithStatus = useMemo(
     () => assignments.map((a) => ({
@@ -711,6 +732,28 @@ export default function StudentDashboard() {
               <StatCard label="Checked by Teacher" value={assignmentsWithStatus.filter((a) => a.feedback).length} sub="Feedback received" type="brown" />
             </div>
 
+            {/* List / Performance toggle */}
+            <div className="flex gap-2">
+              {[
+                { key: 'list',        label: '📋 Worksheets' },
+                { key: 'performance', label: '📈 Performance' },
+              ].map(({ key, label }) => (
+                <button
+                  key={key}
+                  onClick={() => setAssignmentView(key)}
+                  className="px-3.5 py-1.5 rounded-lg text-xs sm:text-sm font-semibold transition"
+                  style={assignmentView === key
+                    ? { background: GOLD, color: 'white' }
+                    : { background: 'rgba(200,134,10,0.12)', color: 'var(--muted)', border: '1px solid rgba(200,134,10,0.25)' }
+                  }
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {assignmentView === 'list' && (
+              <>
             {/* Filter + Sort bar */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 px-3 sm:px-4 py-2.5 flex flex-wrap items-center gap-2">
               <div className="flex gap-1.5 flex-wrap">
@@ -774,6 +817,102 @@ export default function StudentDashboard() {
                 {assignments.length === 0 ? 'No worksheets yet.' : 'Nothing matches this filter.'}
               </p>
             )}
+              </>
+            )}
+
+            {assignmentView === 'performance' && (() => {
+              const { strong: strongWs, moderate: moderateWs, weak: weakWs } = classifyChapters(worksheetChapterStats)
+              const sciWs  = worksheetSubjectStats.find((s) => s.subject === 'Science')
+              const mathWs = worksheetSubjectStats.find((s) => s.subject === 'Maths')
+              const overallWs = worksheetSubmissionPerf.length
+                ? Math.round(worksheetSubmissionPerf.reduce((sum, r) => sum + r.pct, 0) / worksheetSubmissionPerf.length)
+                : null
+
+              function issuesFor(chapterStat) {
+                return topRecurringIssues(
+                  worksheetSubmissionPerf.filter((r) => r.subject === chapterStat.subject && r.chapter === chapterStat.topic),
+                  { limit: 1 }
+                )
+              }
+
+              if (worksheetChapterStats.length === 0) {
+                return (
+                  <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-8 text-center">
+                    <p className="text-sm text-gray-500">Not enough graded worksheets yet to compute performance.</p>
+                    <p className="text-xs text-gray-400 mt-1">This fills in once your teacher's feedback mentions specific strengths or mistakes.</p>
+                  </div>
+                )
+              }
+
+              return (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <StatCard label="Overall Worksheet Avg" value={overallWs !== null ? `${overallWs}%` : '—'} sub="From graded feedback" type="gold" />
+                    <StatCard label="Science Avg" value={sciWs ? `${sciWs.avg}%` : '—'} sub="Worksheets" type="green" />
+                    <StatCard label="Maths Avg" value={mathWs ? `${mathWs.avg}%` : '—'} sub="Worksheets" type="brown" />
+                    <StatCard label="Weak Chapters" value={weakWs.length} sub={weakWs.length ? 'Focus here' : 'None — great work!'} type="red" />
+                  </div>
+
+                  {worksheetChapterStats.length > 0 && (
+                    <div className="bg-white rounded-xl shadow p-3 sm:p-4">
+                      <h2 className="text-sm font-semibold mb-3 flex items-center gap-2" style={{ color: 'var(--text)' }}>
+                        <span className="inline-block w-1 h-4 rounded-full" style={{ background: GOLD }} />
+                        Worksheet Chapter Analysis
+                      </h2>
+                      <ChapterBarChart topics={worksheetChapterStats} />
+                    </div>
+                  )}
+
+                  {[
+                    { label: '🏆 Strong Chapters',   data: strongWs,   type: 'strong',   empty: 'No chapters above 80% yet.' },
+                    { label: '📊 Moderate Chapters',  data: moderateWs, type: 'moderate', empty: 'No moderate chapters.' },
+                    { label: '⚠️ Weak Chapters',      data: weakWs,     type: 'weak',     empty: 'No weak chapters — great work!' },
+                  ].map(({ label, data, type, empty }) => (
+                    <div key={type} className="bg-white rounded-xl shadow overflow-hidden">
+                      <div className="px-4 py-3 border-b border-gray-100">
+                        <p className="text-sm font-semibold text-gray-700">{label} ({data.length})</p>
+                      </div>
+                      {data.length === 0
+                        ? <p className="text-sm text-gray-400 py-6 text-center">{empty}</p>
+                        : <div className="p-3"><TopicTable topics={data} type={type} countLabel="Worksheets" /></div>
+                      }
+                    </div>
+                  ))}
+
+                  <div className="bg-white rounded-xl shadow p-4">
+                    <p className="text-sm font-semibold text-gray-700 mb-3">⚠️ Watch out for</p>
+                    {worksheetRecurringIssues.length === 0
+                      ? <p className="text-xs text-gray-400">No clear recurring mistake pattern detected yet.</p>
+                      : (
+                        <div className="flex flex-wrap gap-2">
+                          {worksheetRecurringIssues.map((issue) => (
+                            <span key={issue.key} className="text-xs px-2.5 py-1 rounded-full" style={{ background: 'rgba(239,68,68,0.1)', color: '#dc2626', border: '1px solid rgba(239,68,68,0.25)' }}>
+                              {issue.label} · {issue.count}×
+                            </span>
+                          ))}
+                        </div>
+                      )
+                    }
+                  </div>
+
+                  <div className="bg-white rounded-xl shadow p-4">
+                    <p className="text-sm font-semibold text-gray-700 mb-3">💡 Suggestions for you</p>
+                    {[...weakWs, ...moderateWs].length === 0
+                      ? <p className="text-xs text-gray-400">No chapters need extra focus right now — nice work.</p>
+                      : (
+                        <div className="space-y-2">
+                          {[...weakWs, ...moderateWs].map((c) => (
+                            <div key={`${c.subject}-${c.topic}`} className="text-xs border border-gray-100 rounded-lg px-3 py-2 bg-gray-50">
+                              {buildSuggestion(c, issuesFor(c), { audience: 'student' })}
+                            </div>
+                          ))}
+                        </div>
+                      )
+                    }
+                  </div>
+                </div>
+              )
+            })()}
           </div>
         )}
       </div>
@@ -810,7 +949,7 @@ function DeltaBadge({ delta }) {
   )
 }
 
-function TopicTable({ topics, type }) {
+function TopicTable({ topics, type, countLabel = 'Tests' }) {
   const cfg = {
     strong:   { border: 'rgba(22,163,74,0.25)',  bg: 'rgba(22,163,74,0.1)',  hover: 'hover:bg-green-50',  color: 'text-green-700',  bar: '#16a34a' },
     moderate: { border: 'rgba(217,119,6,0.25)',  bg: 'rgba(217,119,6,0.08)', hover: 'hover:bg-amber-50',  color: 'text-amber-700',  bar: '#d97706' },
@@ -824,7 +963,7 @@ function TopicTable({ topics, type }) {
             style={{ background: cfg.bg }}>
             <th className="px-4 py-3">Chapter / Topic</th>
             <th className="px-4 py-3">Subject</th>
-            <th className="px-4 py-3 text-center">Tests</th>
+            <th className="px-4 py-3 text-center">{countLabel}</th>
             <th className="px-4 py-3 text-center">Avg %</th>
             <th className="px-4 py-3 text-center">Best</th>
             <th className="px-4 py-3 text-center">Worst</th>
@@ -857,6 +996,84 @@ function TopicTable({ topics, type }) {
         </tbody>
       </table>
     </div>
+  )
+}
+
+function ChapterBarChart({ topics }) {
+  const data = topics.map((t) => ({
+    topic: t.topic.length > 18 ? t.topic.slice(0, 18) + '…' : t.topic,
+    fullTopic: t.topic,
+    avg: t.avg,
+    count: t.count,
+    best: t.best,
+    worst: t.worst,
+    fill: t.avg >= 80 ? '#16a34a' : t.avg >= 60 ? '#c8860a' : '#ef4444',
+  }))
+
+  const maxCount = Math.max(...data.map((d) => d.count), 1)
+
+  return (
+    <ResponsiveContainer width="100%" height={Math.max(220, data.length * 52 + 60)}>
+      <ComposedChart data={data} margin={{ top: 16, right: 50, left: 0, bottom: 60 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="rgba(200,134,10,0.12)" />
+        <XAxis
+          dataKey="topic"
+          tick={{ fontSize: 10, fill: 'var(--faint)' }}
+          angle={-35}
+          textAnchor="end"
+          interval={0}
+          height={70}
+        />
+        <YAxis
+          yAxisId="pct"
+          domain={[0, 100]}
+          tick={{ fontSize: 10, fill: 'var(--faint)' }}
+          unit="%"
+          label={{ value: 'Avg %', angle: -90, position: 'insideLeft', fontSize: 10, fill: 'var(--faint)', offset: 10 }}
+        />
+        <YAxis
+          yAxisId="cnt"
+          orientation="right"
+          domain={[0, maxCount + 1]}
+          tick={{ fontSize: 10, fill: 'var(--faint)' }}
+          allowDecimals={false}
+          label={{ value: 'Worksheets', angle: 90, position: 'insideRight', fontSize: 10, fill: 'var(--faint)', offset: 10 }}
+        />
+        <Tooltip
+          content={({ active, payload }) => {
+            if (!active || !payload?.length) return null
+            const d = payload[0].payload
+            return (
+              <div className="bg-white border border-gray-200 rounded-lg px-3 py-2 text-xs shadow space-y-0.5">
+                <p className="font-semibold text-gray-800 mb-1">{d.fullTopic}</p>
+                <p style={{ color: d.fill }}>Avg: <strong>{d.avg}%</strong></p>
+                <p className="text-gray-500">Worksheets: <strong>{d.count}</strong></p>
+                <p className="text-green-600">Best: {d.best}%</p>
+                <p className="text-red-500">Worst: {d.worst}%</p>
+              </div>
+            )
+          }}
+        />
+        <ReferenceLine yAxisId="pct" y={80} stroke="#16a34a" strokeDasharray="4 3" strokeWidth={1}
+          label={{ value: '80%', position: 'insideTopRight', fontSize: 9, fill: '#16a34a' }} />
+        <ReferenceLine yAxisId="pct" y={60} stroke="#c8860a" strokeDasharray="4 3" strokeWidth={1}
+          label={{ value: '60%', position: 'insideTopRight', fontSize: 9, fill: '#c8860a' }} />
+        <Bar yAxisId="pct" dataKey="avg" radius={[4, 4, 0, 0]}
+          label={{ position: 'top', fontSize: 9, fill: 'var(--faint)', formatter: (v) => `${v}%` }}
+        >
+          {data.map((entry, i) => <Cell key={i} fill={entry.fill} />)}
+        </Bar>
+        <Line
+          yAxisId="cnt"
+          type="monotone"
+          dataKey="count"
+          stroke={NAV}
+          strokeWidth={2}
+          dot={{ fill: NAV, r: 4, strokeWidth: 0 }}
+          label={{ position: 'top', fontSize: 9, fill: NAV, formatter: (v) => `${v}w` }}
+        />
+      </ComposedChart>
+    </ResponsiveContainer>
   )
 }
 
