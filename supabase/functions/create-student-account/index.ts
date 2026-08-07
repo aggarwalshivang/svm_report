@@ -6,18 +6,19 @@
 // until the recipient sets their own. Called from TeacherDashboard's
 // "Create Dashboard" button.
 //
+// The confirmation email is sent via the n8n mail-confirmation-report
+// webhook, NOT Resend (Resend is still used elsewhere, e.g. OTP emails).
+//
 // Deploy:
 //   npx supabase login
 //   npx supabase link --project-ref cexbpkbadthoqbruyjdg
-//   npx supabase secrets set RESEND_API_KEY=... RESEND_FROM="Saraswati VidyaMandir <no-reply@otp.saraswatividyamandir.com>"
 //   npx supabase functions deploy create-student-account --no-verify-jwt
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!
-const RESEND_FROM = Deno.env.get('RESEND_FROM') ?? 'Saraswati VidyaMandir <no-reply@otp.saraswatividyamandir.com>'
+const N8N_MAIL_WEBHOOK_URL = 'https://n8n.saraswatividyamandir.com/webhook/mail-confirmation-report'
 
 const LOGIN_URL = 'https://report.saraswatividyamandir.com/'
 
@@ -69,29 +70,28 @@ Deno.serve(async (req) => {
       if (!alreadyExists) throw createErr
     }
 
-    const emailResp = await fetch('https://api.resend.com/emails', {
+    const subject = 'Your Saraswati VidyaMandir dashboard is ready — here\'s how to log in'
+    const body = `Hi${student_name ? ' ' + String(student_name) : ''},
+
+Your student dashboard has been created. Follow these steps to set your password and log in:
+
+1. Go to ${LOGIN_URL}
+2. Choose Student
+3. Click "Forgot password?"
+4. Enter this email address (${normalizedEmail}) and click "Send Code"
+5. Check this inbox for a 6-digit code and enter it, along with a new password of your choice
+6. Go back to the login page and sign in with your new password
+
+If you didn't expect this email, you can ignore it.`
+
+    const emailResp = await fetch(N8N_MAIL_WEBHOOK_URL, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        from: RESEND_FROM,
-        to: [normalizedEmail],
-        subject: 'Your Saraswati VidyaMandir dashboard is ready — here\'s how to log in',
-        html: `<p>Hi${student_name ? ' ' + String(student_name) : ''},</p>
-               <p>Your student dashboard has been created. Follow these steps to set your password and log in:</p>
-               <ol>
-                 <li>Go to <a href="${LOGIN_URL}">${LOGIN_URL}</a></li>
-                 <li>Choose <strong>Student</strong></li>
-                 <li>Click <strong>Forgot password?</strong></li>
-                 <li>Enter this email address (<strong>${normalizedEmail}</strong>) and click <strong>Send Code</strong></li>
-                 <li>Check this inbox for a 6-digit code and enter it, along with a new password of your choice</li>
-                 <li>Go back to the login page and sign in with your new password</li>
-               </ol>
-               <p>If you didn't expect this email, you can ignore it.</p>`,
-      }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: normalizedEmail, subject, body }),
     })
     if (!emailResp.ok) {
-      const body = await emailResp.text()
-      throw new Error(`Resend error: ${body}`)
+      const errBody = await emailResp.text()
+      throw new Error(`n8n mail webhook error: ${errBody}`)
     }
 
     return new Response(JSON.stringify({ ok: true }), {
