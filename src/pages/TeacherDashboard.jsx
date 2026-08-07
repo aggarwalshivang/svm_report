@@ -101,8 +101,9 @@ function subjectsCompatible(assignmentSubject, feedbackSubject) {
   return fs.includes(as) || as.includes(fs)
 }
 const FEEDBACK_MATCH_THRESHOLD = 0.2
-// Creates the student's login and emails them a code to set their own
-// password, via a Supabase Edge Function — it needs the service-role key,
+// Creates the student's login (unknown random password) and emails them
+// step-by-step instructions for setting their own password via "Forgot
+// password?", via a Supabase Edge Function — it needs the service-role key,
 // which must never live in browser code.
 async function provisionStudentAccount(email, studentId, studentName) {
   const { data, error } = await supabase.functions.invoke('create-student-account', {
@@ -858,7 +859,7 @@ export default function TeacherDashboard() {
     if (failed.length) {
       alert(`Could not create login for: ${failed.map((f) => f.email).join(', ')}\n\n${failed[0].message}`)
     } else {
-      alert(`Dashboard created.\nAn email was sent to ${pendingEmails.map((e) => e.email).join(', ')} with a code to set their password.`)
+      alert(`Dashboard created.\nAn email was sent to ${pendingEmails.map((e) => e.email).join(', ')} with step-by-step instructions to set their password via "Forgot password?".`)
     }
     setCreatingLoginId(null)
   }

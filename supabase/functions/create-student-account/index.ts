@@ -1,8 +1,10 @@
-// Creates a Supabase Auth account for a newly added student and emails them a
-// one-time code so they can set their own password, via Login.jsx's "Forgot
-// password" flow (verified by verify-password-otp). Accounts are created with
-// a random, unknown password — nobody but the student ever sets it. Called
-// from TeacherDashboard's "Create Dashboard" button.
+// Creates a Supabase Auth account for a newly added student and emails them
+// step-by-step instructions for setting their own password via Login.jsx's
+// "Forgot password?" flow (send-password-otp + verify-password-otp). This
+// email carries no OTP code itself — it just tells them how to get one.
+// Accounts are created with a random, unknown password — nobody knows it
+// until the recipient sets their own. Called from TeacherDashboard's
+// "Create Dashboard" button.
 //
 // Deploy:
 //   npx supabase login
@@ -17,9 +19,7 @@ const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!
 const RESEND_FROM = Deno.env.get('RESEND_FROM') ?? 'Saraswati VidyaMandir <no-reply@otp.saraswatividyamandir.com>'
 
-const OTP_TTL_MS = 10 * 60 * 1000 // code valid for 10 minutes
-const RESEND_COOLDOWN_MS = 45 * 1000 // must wait 45s between sends
-const MAX_SENDS_PER_HOUR = 5
+const LOGIN_URL = 'https://report.saraswatividyamandir.com/'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -30,12 +30,6 @@ function randomPassword() {
   const bytes = new Uint8Array(24)
   crypto.getRandomValues(bytes)
   return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('')
-}
-
-async function hashCode(code: string) {
-  const bytes = new TextEncoder().encode(code)
-  const digest = await crypto.subtle.digest('SHA-256', bytes)
-  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
 Deno.serve(async (req) => {
@@ -61,7 +55,7 @@ Deno.serve(async (req) => {
 
     const { error: createErr } = await admin.auth.admin.createUser({
       email: normalizedEmail,
-      password: randomPassword(), // unknown to everyone — the student sets their own via the emailed code
+      password: randomPassword(), // unknown to everyone — set later via "Forgot password?"
       email_confirm: true,
       // app_metadata (not user_metadata) — only the service role can set it, so a
       // student can't self-elevate by editing their own metadata from the browser.
@@ -75,45 +69,24 @@ Deno.serve(async (req) => {
       if (!alreadyExists) throw createErr
     }
 
-    // Rate-limit welcome emails the same way send-password-otp rate-limits resets.
-    const now = Date.now()
-    const { data: recent, error: recentErr } = await admin
-      .from('password_reset_otps')
-      .select('created_at')
-      .eq('email', normalizedEmail)
-      .order('created_at', { ascending: false })
-      .limit(MAX_SENDS_PER_HOUR)
-    if (recentErr) throw recentErr
-
-    if (recent?.[0] && now - new Date(recent[0].created_at).getTime() < RESEND_COOLDOWN_MS) {
-      return fail('An email was just sent to this address. Please wait before retrying.', 429)
-    }
-    const sentInLastHour = (recent ?? []).filter((r) => now - new Date(r.created_at).getTime() < 60 * 60 * 1000)
-    if (sentInLastHour.length >= MAX_SENDS_PER_HOUR) {
-      return fail('Too many emails sent to this address recently. Try again later.', 429)
-    }
-
-    const code = Math.floor(100000 + Math.random() * 900000).toString()
-    const code_hash = await hashCode(code)
-    const expires_at = new Date(now + OTP_TTL_MS).toISOString()
-
-    const { error: insertErr } = await admin
-      .from('password_reset_otps')
-      .insert({ email: normalizedEmail, code_hash, expires_at })
-    if (insertErr) throw insertErr
-
     const emailResp = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         from: RESEND_FROM,
         to: [normalizedEmail],
-        subject: 'Your Saraswati VidyaMandir dashboard is ready — set your password',
+        subject: 'Your Saraswati VidyaMandir dashboard is ready — here\'s how to log in',
         html: `<p>Hi${student_name ? ' ' + String(student_name) : ''},</p>
-               <p>Your student dashboard has been created. Use the code below to set your own password:</p>
-               <p style="font-size:28px;font-weight:bold;letter-spacing:4px;">${code}</p>
-               <p>Go to the login page, choose <strong>Student</strong>, click <strong>Forgot password?</strong>, enter your email and this code, then choose a password.</p>
-               <p>This code expires in 10 minutes. If you didn't expect this email, you can ignore it.</p>`,
+               <p>Your student dashboard has been created. Follow these steps to set your password and log in:</p>
+               <ol>
+                 <li>Go to <a href="${LOGIN_URL}">${LOGIN_URL}</a></li>
+                 <li>Choose <strong>Student</strong></li>
+                 <li>Click <strong>Forgot password?</strong></li>
+                 <li>Enter this email address (<strong>${normalizedEmail}</strong>) and click <strong>Send Code</strong></li>
+                 <li>Check this inbox for a 6-digit code and enter it, along with a new password of your choice</li>
+                 <li>Go back to the login page and sign in with your new password</li>
+               </ol>
+               <p>If you didn't expect this email, you can ignore it.</p>`,
       }),
     })
     if (!emailResp.ok) {
