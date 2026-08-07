@@ -82,7 +82,10 @@ Your student dashboard has been created. Follow these steps to set your password
 5. Check this inbox for a 6-digit code and enter it, along with a new password of your choice
 6. Go back to the login page and sign in with your new password
 
-If you didn't expect this email, you can ignore it.`
+If you didn't expect this email, you can ignore it.
+
+Team
+Saraswati VidyaMandir`
 
     const emailResp = await fetch(N8N_MAIL_WEBHOOK_URL, {
       method: 'POST',
