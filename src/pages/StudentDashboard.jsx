@@ -136,51 +136,15 @@ export default function StudentDashboard() {
   useEffect(() => {
     if (!session?.studentId || !session?.class) return
     async function computeRank() {
-      // Fetch classmates (deduplicate by student_id)
-      const { data: classmates } = await supabase
-        .from('student_emails')
-        .select('student_id, report_start_date')
-        .eq('class', session.class)
-
-      if (!classmates?.length) return
-      const uniqueIds = [...new Set(classmates.map((s) => String(s.student_id)).filter(Boolean))]
-      setClassSize(uniqueIds.length)
-
-      // Each classmate's own report cutoff (set for students added mid-year), keyed by student_id.
-      const cutoffById = {}
-      classmates.forEach((s) => { cutoffById[String(s.student_id)] = s.report_start_date })
-
-      // Page through all scores (avoid 1000-row default cap)
-      const PAGE = 1000
-      let allScores = []
-      let from = 0
-      while (true) {
-        const { data, error } = await supabase
-          .from('student_scores')
-          .select('student_id, date, score_obtained, total_marks, is_absent')
-          .range(from, from + PAGE - 1)
-        if (error || !data || data.length === 0) break
-        allScores = allScores.concat(data)
-        if (data.length < PAGE) break
-        from += PAGE
-      }
-
-      // Build avg map — default every unique classmate to 0
-      const avgMap = Object.fromEntries(uniqueIds.map((id) => [id, { total: 0, count: 0 }]))
-      allScores.forEach((r) => {
-        const key = String(r.student_id)
-        const cutoff = cutoffById[key]
-        if (!avgMap[key] || r.is_absent || (cutoff && r.date < cutoff)) return
-        avgMap[key].total += (r.score_obtained / r.total_marks) * 100
-        avgMap[key].count += 1
-      })
-
-      const ranked = Object.entries(avgMap)
-        .map(([id, d]) => ({ id, avg: d.count > 0 ? d.total / d.count : 0 }))
-        .sort((a, b) => b.avg - a.avg)
-
-      const pos = ranked.findIndex((r) => r.id === String(session.studentId))
-      setClassRank(pos >= 0 ? pos + 1 : null)
+      // Ranking classmates requires reading their scores too, which RLS
+      // (fix-student-data-select-rls.sql) restricts to "own rows only" for
+      // students — so this runs server-side via a security-definer RPC
+      // (see scripts/create-class-rank-rpc.sql) that returns just the
+      // caller's own rank + class size, never other students' data.
+      const { data, error } = await supabase.rpc('get_my_class_rank').maybeSingle()
+      if (error || !data) return
+      setClassRank(data.rank ?? null)
+      setClassSize(data.class_size ?? null)
     }
     computeRank()
   }, [session?.studentId, session?.class])
