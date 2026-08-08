@@ -408,7 +408,7 @@ export default function StudentDashboard() {
     <div className="min-h-screen flex items-center justify-center" style={{ background: DARK }}>
       <div className="text-center">
         <div className="w-14 h-14 rounded-2xl overflow-hidden mx-auto mb-4" style={{ background: NAV }}>
-          <img src="/shivang.png" alt="Saraswati VidyaMandir" className="w-full h-full object-cover" />
+          <img src="/shivang.png" alt="Saraswati Vidyamandir" className="w-full h-full object-cover" />
         </div>
         <p className="font-semibold text-sm" style={{ color: 'var(--muted)' }}>Loading your report…</p>
       </div>
@@ -421,11 +421,11 @@ export default function StudentDashboard() {
       <nav className="px-5 py-3 flex items-center justify-between" style={{ background: NAV, color: 'var(--text)', borderBottom: `2px solid ${GOLD}`, boxShadow: '0 2px 8px rgba(0,0,0,0.15)' }}>
         <div className="flex items-center gap-3 min-w-0">
           <div className="w-9 h-9 rounded-xl overflow-hidden flex-shrink-0" style={{ background: GOLD }}>
-            <img src="/shivang.png" alt="Saraswati VidyaMandir" className="w-full h-full object-cover" />
+            <img src="/shivang.png" alt="Saraswati Vidyamandir" className="w-full h-full object-cover" />
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <span className="font-semibold text-sm hidden sm:block">Saraswati VidyaMandir</span>
+              <span className="font-semibold text-sm hidden sm:block">Saraswati Vidyamandir</span>
               <span className="font-bold text-sm sm:hidden">SVM</span>
               <span className="px-1.5 py-0.5 rounded text-[10px] font-bold flex-shrink-0" style={{ background: 'rgba(200,134,10,0.15)', border: '1px solid rgba(200,134,10,0.3)' }}>
                 Class {session?.class}
