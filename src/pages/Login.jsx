@@ -310,6 +310,7 @@ export default function Login() {
         ) : forgotStep === 'request' ? (
           <form onSubmit={handleRequestOtp} className="space-y-4">
             <p className="text-sm" style={{ color: 'var(--faint)' }}>Enter your {role === 'teacher' ? 'teacher' : 'student'} email and we'll send a 6-digit code.</p>
+            <p className="text-sm" style={{ color: 'var(--faint)' }}>Please use the email ID registered with the institute.</p>
             <div>
               <label className="block text-sm font-medium mb-1" style={{ color: 'var(--muted)' }}>Email</label>
               <input
@@ -374,7 +375,7 @@ export default function Login() {
                   className="text-xs font-medium"
                   style={{ color: GOLD }}
                 >
-                  Forgot password?
+                  First time? / Forgot password?
                 </button>
               </div>
               <div className="relative">
@@ -418,6 +419,7 @@ export default function Login() {
             >
               {loading ? 'Checking…' : 'Login'}
             </button>
+          <p className="text-xs text-center mt-2" style={{ color: 'var(--faint)' }}>First time here? Tap 'First time? / Forgot password?' above to set your password.</p>
           </form>
         )}
       </div>
