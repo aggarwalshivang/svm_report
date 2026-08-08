@@ -160,9 +160,9 @@ export default function Login() {
         {/* Header */}
         <div className="text-center mb-8">
           <div className="w-16 h-16 rounded-2xl overflow-hidden mx-auto mb-4" style={{ background: GOLD }}>
-            <img src="/shivang.png" alt="Saraswati VidyaMandir" className="w-full h-full object-cover" />
+            <img src="/shivang.png" alt="Saraswati Vidyamandir" className="w-full h-full object-cover" />
           </div>
-          <h1 className="text-2xl font-bold" style={{ color: 'var(--text)' }}>Saraswati VidyaMandir</h1>
+          <h1 className="text-2xl font-bold" style={{ color: 'var(--text)' }}>Saraswati Vidyamandir</h1>
           <p className="text-sm mt-1" style={{ color: 'var(--faint)' }}>Student Report Portal</p>
         </div>
 
