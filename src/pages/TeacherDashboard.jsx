@@ -224,6 +224,8 @@ export default function TeacherDashboard() {
   const [markingAllSubmittedId, setMarkingAllSubmittedId] = useState(null)
   const [n8nDocsOpen, setN8nDocsOpen] = useState(false)
   const [n8nCopied, setN8nCopied] = useState(false)
+  const [sendingList, setSendingList] = useState(null) // 'submitted' | 'unsubmitted' | null
+  const [sendListResult, setSendListResult] = useState(null)
 
   useEffect(() => {
     // Supabase caps every select at 1000 rows by default — page through
@@ -680,6 +682,27 @@ export default function TeacherDashboard() {
     } catch {
       // best-effort notification; a failure here shouldn't block add/delete
     }
+  }
+
+  async function sendWorksheetList(status) {
+    setSendingList(status)
+    setSendListResult(null)
+    try {
+      const res = await fetch(`https://n8n.saraswatividyamandir.com/webhook/list-student?status=${status}&type=${status}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status,
+          type: status,
+          sender: session?.email || 'Teacher',
+          timestamp: new Date().toISOString(),
+        }),
+      })
+      setSendListResult({ status, success: res.ok })
+    } catch {
+      setSendListResult({ status, success: false })
+    }
+    setSendingList(null)
   }
 
   async function addStudent() {
@@ -1774,15 +1797,40 @@ function ini(name) {
         {/* ── Assignments tab ── */}
         {view === 'assignments' && (
           <div className="space-y-4">
-            <a
-              href="https://n8n.saraswatividyamandir.com/form/64d64bc4-54e8-4921-ae7b-e112cc163726"
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-2 text-sm font-semibold px-4 py-2.5 rounded-lg text-white transition"
-              style={{ background: GOLD }}
-            >
-              📤 Upload Worksheet ↗
-            </a>
+            <div className="flex flex-wrap items-center gap-2">
+              <a
+                href="https://n8n.saraswatividyamandir.com/form/64d64bc4-54e8-4921-ae7b-e112cc163726"
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-2 text-sm font-semibold px-4 py-2.5 rounded-lg text-white transition"
+                style={{ background: GOLD }}
+              >
+                📤 Upload Worksheet ↗
+              </a>
+              <button
+                onClick={() => sendWorksheetList('submitted')}
+                disabled={sendingList !== null}
+                className="inline-flex items-center gap-2 text-sm font-semibold px-4 py-2.5 rounded-lg transition disabled:opacity-50"
+                style={{ background: 'rgba(34,197,94,0.12)', color: '#16a34a', border: '1px solid rgba(34,197,94,0.3)' }}
+              >
+                {sendingList === 'submitted' ? 'Sending…' : '✅ Send Submitted List'}
+              </button>
+              <button
+                onClick={() => sendWorksheetList('unsubmitted')}
+                disabled={sendingList !== null}
+                className="inline-flex items-center gap-2 text-sm font-semibold px-4 py-2.5 rounded-lg transition disabled:opacity-50"
+                style={{ background: 'rgba(239,68,68,0.1)', color: '#dc2626', border: '1px solid rgba(239,68,68,0.3)' }}
+              >
+                {sendingList === 'unsubmitted' ? 'Sending…' : '❌ Send Unsubmitted List'}
+              </button>
+              {sendListResult && (
+                <span className="text-xs font-medium" style={{ color: sendListResult.success ? '#16a34a' : '#dc2626' }}>
+                  {sendListResult.success
+                    ? `✓ ${sendListResult.status === 'submitted' ? 'Submitted' : 'Unsubmitted'} list sent`
+                    : 'Failed to send'}
+                </span>
+              )}
+            </div>
 
             {/* ── Class-level summary (aggregate only — per-worksheet detail lives in the table below) ── */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
