@@ -110,10 +110,28 @@ Deno.serve(async (req) => {
     forward.append('Homework File', file, file.name)
 
     const formQueryParameters = new URLSearchParams({ portion, class: className, folder, worksheet })
-    const n8nResp = await fetch(`${N8N_WEBHOOK_URL}?${formQueryParameters.toString()}`, {
-      method: 'POST',
-      body: forward,
-    })
+    // n8n's grading step is usually fast, but an AI call that hangs would
+    // otherwise be killed by the platform's own execution limit before we
+    // get a chance to respond — the client then sees an opaque "Failed to
+    // send a request to the Edge Function" instead of a real error. Abort
+    // well before that limit so we can return a clear, retryable message.
+    const n8nController = new AbortController()
+    const n8nTimeout = setTimeout(() => n8nController.abort(), 60_000)
+    let n8nResp: Response
+    try {
+      n8nResp = await fetch(`${N8N_WEBHOOK_URL}?${formQueryParameters.toString()}`, {
+        method: 'POST',
+        body: forward,
+        signal: n8nController.signal,
+      })
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        throw new Error('Grading is taking longer than expected. Please try submitting again in a minute.')
+      }
+      throw err
+    } finally {
+      clearTimeout(n8nTimeout)
+    }
     if (!n8nResp.ok) {
       const body = await n8nResp.text().catch(() => '')
       throw new Error(`n8n webhook rejected the upload (${n8nResp.status}): ${body.slice(0, 300)}`)

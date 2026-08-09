@@ -1090,6 +1090,13 @@ function AssignmentCard({ a, session, onSubmitted }) {
       if (!message && fnErr?.context?.json) {
         try { message = (await fnErr.context.json())?.error } catch { /* not JSON */ }
       }
+      // supabase-js's own "Failed to send a request to the Edge Function" is
+      // a raw network-level failure (request never reached Supabase, or the
+      // connection dropped) — surface it as an actionable retry hint instead
+      // of the confusing internal wording.
+      if (!message && fnErr?.message?.includes('Failed to send a request')) {
+        message = 'Connection issue while uploading. Please check your internet connection and try again.'
+      }
       setError(message || fnErr?.message || 'Upload failed. Please try again.')
       return
     }
