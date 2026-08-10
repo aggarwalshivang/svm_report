@@ -2442,7 +2442,7 @@ function ini(name) {
       {selected && (
         <StudentDetailModal
           student={selected}
-          scores={allScores.filter((r) => r.student_id === selected.student_id)}
+          scores={allScores.filter((r) => r.student_id === selected.student_id && countsForStudent(r, selected))}
           onClose={() => setSelected(null)}
         />
       )}
