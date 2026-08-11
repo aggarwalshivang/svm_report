@@ -3,6 +3,25 @@ import { supabase } from '../../lib/supabase'
 import { REPORT_TOPICS, MIN_PERCENTAGE_OPTIONS } from '../../constants/reportTopics'
 import { parseScoreCsv, computeExamDate, computeTotalMarksFromCsv, matchAndBuildRows, buildScoreCsv, buildAttendanceCsv } from '../../lib/updateReport'
 
+// Some students borrow a shared/temp device when they forget their own for
+// a Learnyst test — the export then shows that device's own registered
+// name/email, not whoever actually took it. This table is just a flat list
+// of known shared-device emails (see scripts/create-report-shared-device-emails-table.sql);
+// who really submitted under one varies every time, so it's never auto-matched.
+const SHARED_DEVICE_EMAILS_TABLE = 'report_shared_device_emails'
+
+function downloadTextFile(filename, content) {
+  const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
 const GOLD = 'var(--gold)'
 const NAV = 'var(--nav)'
 const DEFAULT_RECIPIENT = 'svmambala@gmail.com'
@@ -53,10 +72,62 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
   const cooldownRef = useRef(null)
   useEffect(() => () => clearInterval(cooldownRef.current), [])
 
+  // Shared-device handling: parsed as soon as a file is chosen (not gated
+  // behind Preview), so the "who really took this?" popup can appear
+  // immediately per the requested flow.
+  const [sharedDeviceEmails, setSharedDeviceEmails] = useState([])
+  const [csvRows, setCsvRows] = useState([])
+  const [deviceRows, setDeviceRows] = useState([]) // flagged rows needing manual resolution
+  const [deviceAssignments, setDeviceAssignments] = useState({}) // rowIndex -> student_id
+  const [resolvingDevices, setResolvingDevices] = useState(false)
+
+  useEffect(() => {
+    supabase.from(SHARED_DEVICE_EMAILS_TABLE).select('*').then(({ data }) => setSharedDeviceEmails(data || []))
+  }, [])
+
   const topics = REPORT_TOPICS[classNum]?.[subject] || []
+  const classRoster = studentList.filter((s) => Number(s.class) === Number(classNum))
 
   function changeClass(c) { setClassNum(c); setTopic('') }
   function changeSubject(s) { setSubject(s); setTopic('') }
+
+  async function pickFile(e) {
+    const f = e.target.files?.[0] || null
+    setError('')
+    setFile(f)
+    setCsvRows([])
+    setDeviceRows([])
+    setDeviceAssignments({})
+    if (!f) return
+
+    try {
+      const text = await f.text()
+      const rows = parseScoreCsv(text)
+      setCsvRows(rows)
+
+      const knownEmails = new Set(sharedDeviceEmails.map((d) => d.email.toLowerCase()))
+      const flagged = rows
+        .map((r, rowIndex) => ({ ...r, rowIndex }))
+        .filter((r) => r.learnerEmail && knownEmails.has(r.learnerEmail.toLowerCase()))
+      if (flagged.length) {
+        setDeviceRows(flagged)
+        setResolvingDevices(true)
+      }
+    } catch {
+      // Preview will surface a proper "couldn't read that file" error.
+    }
+  }
+
+  async function markAsSharedDevice(email) {
+    if (!email) return
+    const { data, error: insertErr } = await supabase
+      .from(SHARED_DEVICE_EMAILS_TABLE)
+      .upsert({ email: email.toLowerCase() }, { onConflict: 'email', ignoreDuplicates: true })
+      .select()
+    if (!insertErr && data) {
+      setSharedDeviceEmails((prev) => [...prev.filter((d) => d.email !== email.toLowerCase()), ...data])
+    }
+  }
 
   function startOtpCooldown() {
     setOtpCooldown(OTP_RESEND_COOLDOWN)
@@ -127,24 +198,36 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
     if (!file) { setError('Choose a CSV file to upload.'); return }
     if (!topic) { setError('Choose a topic.'); return }
     if (!recipient.trim()) { setError('Enter a recipient email.'); return }
+    if (!csvRows.length) { setError('That CSV has no usable rows.'); return }
 
     setBusy(true)
     try {
-      const text = await file.text()
-      const csvRows = parseScoreCsv(text)
-      if (!csvRows.length) throw new Error('No rows found in that CSV.')
+      // Unresolved shared-device rows must never be name-matched — a
+      // device's own registered name could coincidentally match a real
+      // roster student and silently mis-attribute their score.
+      const excludeRowIndexes = new Set(
+        deviceRows.filter((r) => !deviceAssignments[r.rowIndex]).map((r) => r.rowIndex)
+      )
+      // Resolved ones stand in for whichever real student the teacher picked.
+      const resolvedCsvRows = csvRows.map((r, i) => {
+        const assignedId = deviceAssignments[i]
+        if (!assignedId) return r
+        const assignedStudent = studentList.find((s) => s.student_id === assignedId)
+        return assignedStudent ? { ...r, name: assignedStudent.student_name } : r
+      })
 
       const effectiveTotalMarks = totalMarks && Number(totalMarks) > 0
         ? Number(totalMarks)
-        : computeTotalMarksFromCsv(csvRows)
+        : computeTotalMarksFromCsv(resolvedCsvRows)
       if (!effectiveTotalMarks) {
         throw new Error('Enter Total Marks — the CSV has no usable Total Score column to take it from.')
       }
       const totalMarksFromCsv = !totalMarks || Number(totalMarks) <= 0
 
-      const examDate = computeExamDate(csvRows)
+      const examDate = computeExamDate(resolvedCsvRows)
       const { rows, unmatchedCsvNames } = matchAndBuildRows({
-        roster: studentList, csvRows, classNum, subject, topicName: topic, totalMarks: effectiveTotalMarks, examDate,
+        roster: studentList, csvRows: resolvedCsvRows, classNum, subject, topicName: topic,
+        totalMarks: effectiveTotalMarks, examDate, excludeRowIndexes,
       })
       if (!rows.length) throw new Error(`No Class ${classNum} students found in the roster.`)
 
@@ -157,7 +240,17 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
         .eq('date', examDate)
       if (dupErr) throw dupErr
 
-      setPreview({ rows, unmatchedCsvNames, examDate, totalMarks: effectiveTotalMarks, totalMarksFromCsv, duplicateCount: existing?.length || 0 })
+      const sourceIdByStudentId = new Map(studentList.map((s) => [s.student_id, s.emails?.[0]?.source_id ?? '']))
+      const scoreCsv = buildScoreCsv(rows, subject)
+      const attendanceCsv = buildAttendanceCsv(rows, sourceIdByStudentId)
+      const fileTag = `${topic} class ${classNum} subject ${subject}`
+      downloadTextFile(`Score_classpro ${fileTag}.csv`, scoreCsv)
+      downloadTextFile(`Attendance_classpro ${fileTag}.csv`, attendanceCsv)
+
+      setPreview({
+        rows, unmatchedCsvNames, examDate, totalMarks: effectiveTotalMarks, totalMarksFromCsv,
+        duplicateCount: existing?.length || 0, scoreCsv, attendanceCsv, fileTag,
+      })
       setStage('preview')
     } catch (err) {
       setError(err.message || 'Failed to read that file.')
@@ -169,14 +262,12 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
     setBusy(true)
     setError('')
     try {
-      const { rows, examDate, totalMarks: effectiveTotalMarks } = preview
+      // Reuse the exact CSVs already built (and downloaded) at Preview time,
+      // so what the teacher inspected locally is byte-identical to what gets emailed.
+      const { rows, examDate, totalMarks: effectiveTotalMarks, scoreCsv, attendanceCsv, fileTag } = preview
       const { data: inserted, error: insertErr } = await supabase.from('student_scores').insert(rows).select()
       if (insertErr) throw insertErr
 
-      const sourceIdByStudentId = new Map(studentList.map((s) => [s.student_id, s.emails?.[0]?.source_id ?? '']))
-      const scoreCsv = buildScoreCsv(rows, subject)
-      const attendanceCsv = buildAttendanceCsv(rows, sourceIdByStudentId)
-      const fileTag = `${topic} class ${classNum} subject ${subject}`
       const message = `Classpro\n\nTopic:\n${topic}\n\nClass:\n${classNum}\n\nSubject:\n${subject}\n\nExam On:\n${examDate}\n\nMin Percentage:\n${minPercentage}\n\nTotal Marks:\n${effectiveTotalMarks}`
 
       let emailOk = true
@@ -213,6 +304,9 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
     setStage('form')
     setPreview(null)
     setFile(null)
+    setCsvRows([])
+    setDeviceRows([])
+    setDeviceAssignments({})
     setTopic('')
     setTotalMarks('')
     setError('')
@@ -271,7 +365,7 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
                 style={{ borderColor: 'rgba(200,134,10,0.35)', color: GOLD, background: 'rgba(200,134,10,0.06)' }}
               >
                 {file ? file.name : '📎 Choose CSV'}
-                <input type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+                <input type="file" accept=".csv,text/csv" className="hidden" onChange={pickFile} />
               </label>
             </div>
 
@@ -365,12 +459,15 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
 
             {error && <p className="text-sm text-red-500 font-medium">{error}</p>}
 
-            <button type="submit" disabled={busy}
-              className="text-sm font-semibold px-5 py-2.5 rounded-lg text-white transition disabled:opacity-50"
-              style={{ background: GOLD }}
-            >
-              {busy ? 'Reading file…' : 'Preview'}
-            </button>
+            <div>
+              <button type="submit" disabled={busy}
+                className="text-sm font-semibold px-5 py-2.5 rounded-lg text-white transition disabled:opacity-50"
+                style={{ background: GOLD }}
+              >
+                {busy ? 'Reading file…' : 'Preview'}
+              </button>
+              <p className="text-[11px] text-gray-400 mt-1.5">Downloads the two report CSVs to check — nothing is saved or emailed yet.</p>
+            </div>
           </form>
         )}
 
@@ -404,9 +501,25 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
             })()}
 
             {preview.unmatchedCsvNames.length > 0 && (
-              <div className="rounded-lg px-3 py-2.5 text-sm" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', color: '#b91c1c' }}>
-                <p className="font-semibold mb-1">{preview.unmatchedCsvNames.length} name(s) in the CSV don't match any Class {classNum} student and will be skipped:</p>
-                <p className="text-xs">{preview.unmatchedCsvNames.join(', ')}</p>
+              <div className="rounded-lg px-3 py-2.5 text-sm space-y-2" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', color: '#b91c1c' }}>
+                <p className="font-semibold">{preview.unmatchedCsvNames.length} row(s) in the CSV don't match any Class {classNum} student and will be skipped:</p>
+                <div className="space-y-1">
+                  {preview.unmatchedCsvNames.map((u) => {
+                    const isKnownDevice = sharedDeviceEmails.some((d) => d.email === u.email?.toLowerCase())
+                    return (
+                      <div key={u.rowIndex} className="flex flex-wrap items-center gap-2 text-xs">
+                        <span>{u.name}{u.email ? ` (${u.email})` : ''}</span>
+                        {u.email && !isKnownDevice && (
+                          <button type="button" onClick={() => markAsSharedDevice(u.email)}
+                            className="font-semibold underline underline-offset-2"
+                          >
+                            + Mark as shared device
+                          </button>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
             )}
 
@@ -452,6 +565,50 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
           </div>
         )}
       </div>
+
+      {resolvingDevices && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center sm:p-4" onClick={() => setResolvingDevices(false)}>
+          <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-lg max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="sticky top-0 bg-white border-b px-5 py-4 z-10">
+              <p className="font-semibold text-gray-800">Shared device submissions found</p>
+              <p className="text-xs text-gray-500 mt-1">
+                {deviceRows.length} row{deviceRows.length !== 1 ? 's' : ''} used a known shared/temp device email — pick who actually took each one, since it varies by submission.
+              </p>
+            </div>
+            <div className="p-5 space-y-4">
+              {deviceRows.map((r) => (
+                <div key={r.rowIndex} className="border border-gray-100 rounded-lg p-3">
+                  <p className="text-xs text-gray-500 mb-2">
+                    CSV says <span className="font-semibold text-gray-700">{r.name}</span> ({r.learnerEmail}) — score {r.score}/{r.totalScore}
+                  </p>
+                  <select
+                    value={deviceAssignments[r.rowIndex] ?? ''}
+                    onChange={(e) => setDeviceAssignments((prev) => ({
+                      ...prev,
+                      [r.rowIndex]: e.target.value ? Number(e.target.value) : undefined,
+                    }))}
+                    className={inputClass} onFocus={focusGold} onBlur={blurGold}
+                  >
+                    <option value="">Who actually took this? (leave blank to skip)</option>
+                    {classRoster.map((s) => (
+                      <option key={s.student_id} value={s.student_id}>
+                        {s.student_name} — {s.emails?.[0]?.email || 'no email'}{s.phone ? ` — ${s.phone}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ))}
+            </div>
+            <div className="sticky bottom-0 bg-white border-t px-5 py-3 flex justify-end">
+              <button type="button" onClick={() => setResolvingDevices(false)}
+                className="text-sm font-semibold px-5 py-2.5 rounded-lg text-white transition" style={{ background: GOLD }}
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

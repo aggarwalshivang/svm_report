@@ -65,16 +65,22 @@ export function computeTotalMarksFromCsv(csvRows) {
 // Learnyst login email differed from their registered email could end up
 // scored AND flagged absent under that split). `roster` is expected
 // deduped to one entry per student_id (TeacherDashboard's `studentList`).
-export function matchAndBuildRows({ roster, csvRows, classNum, subject, topicName, totalMarks, examDate }) {
+// `excludeRowIndexes` marks CSV rows (by index into `csvRows`) that must
+// never be treated as a name match — used for shared-device rows the
+// teacher hasn't manually resolved yet, so a device's own registered name
+// can never accidentally auto-match a same-named roster student.
+export function matchAndBuildRows({ roster, csvRows, classNum, subject, topicName, totalMarks, examDate, excludeRowIndexes }) {
   const classRoster = roster.filter((s) => Number(s.class) === Number(classNum))
+  const excluded = excludeRowIndexes ?? new Set()
 
   const csvByName = new Map()
-  csvRows.forEach((r) => {
+  csvRows.forEach((r, i) => {
+    if (excluded.has(i)) return
     const key = normalizeName(r.name)
-    if (key) csvByName.set(key, r)
+    if (key && !csvByName.has(key)) csvByName.set(key, { ...r, rowIndex: i })
   })
 
-  const matchedKeys = new Set()
+  const matchedRowIndexes = new Set()
   const rows = classRoster.map((student) => {
     const key = normalizeName(student.student_name)
     const csvRow = csvByName.get(key)
@@ -87,7 +93,7 @@ export function matchAndBuildRows({ roster, csvRows, classNum, subject, topicNam
       total_marks: Number(totalMarks),
     }
     if (csvRow) {
-      matchedKeys.add(key)
+      matchedRowIndexes.add(csvRow.rowIndex)
       const obtained = csvRow.score
       const originalTotal = csvRow.totalScore
       const scoreObtained = Number.isFinite(obtained) && Number.isFinite(originalTotal) && originalTotal > 0
@@ -99,8 +105,8 @@ export function matchAndBuildRows({ roster, csvRows, classNum, subject, topicNam
   })
 
   const unmatchedCsvNames = csvRows
-    .filter((r) => !matchedKeys.has(normalizeName(r.name)))
-    .map((r) => r.name)
+    .map((r, i) => ({ name: r.name, email: r.learnerEmail, rowIndex: i }))
+    .filter((r) => !matchedRowIndexes.has(r.rowIndex))
 
   return { rows, unmatchedCsvNames }
 }
