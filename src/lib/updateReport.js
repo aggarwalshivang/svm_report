@@ -38,6 +38,26 @@ export function computeExamDate(csvRows) {
   return best ?? csvRows[0]?.submittedOn ?? ''
 }
 
+// Total Marks is an optional override — if the teacher leaves it blank, fall
+// back to whatever Learnyst's own "Total Score" column says (the value most
+// rows agree on, same mode-picking approach as computeExamDate, in case a
+// stray row has a typo'd total).
+export function computeTotalMarksFromCsv(csvRows) {
+  const counts = new Map()
+  csvRows.forEach((r) => {
+    if (!Number.isFinite(r.totalScore) || r.totalScore <= 0) return
+    counts.set(r.totalScore, (counts.get(r.totalScore) || 0) + 1)
+  })
+  let best = null
+  let bestCount = 0
+  counts.forEach((count, total) => {
+    if (count > bestCount) { best = total; bestCount = count }
+  })
+  if (best !== null) return best
+  const fallback = csvRows.find((r) => Number.isFinite(r.totalScore) && r.totalScore > 0)
+  return fallback ? fallback.totalScore : null
+}
+
 // Matches every roster student against the CSV by name (trimmed,
 // case/whitespace-insensitive) — one join key used for scoring, absentee
 // rows, and both report CSVs, unlike the original n8n flow which matched by

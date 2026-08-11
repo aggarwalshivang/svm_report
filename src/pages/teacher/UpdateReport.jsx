@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { REPORT_TOPICS, MIN_PERCENTAGE_OPTIONS } from '../../constants/reportTopics'
-import { parseScoreCsv, computeExamDate, matchAndBuildRows, buildScoreCsv, buildAttendanceCsv } from '../../lib/updateReport'
+import { parseScoreCsv, computeExamDate, computeTotalMarksFromCsv, matchAndBuildRows, buildScoreCsv, buildAttendanceCsv } from '../../lib/updateReport'
 
 const GOLD = 'var(--gold)'
 const NAV = 'var(--nav)'
@@ -126,7 +126,6 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
     setError('')
     if (!file) { setError('Choose a CSV file to upload.'); return }
     if (!topic) { setError('Choose a topic.'); return }
-    if (!totalMarks || Number(totalMarks) <= 0) { setError('Enter Total Marks.'); return }
     if (!recipient.trim()) { setError('Enter a recipient email.'); return }
 
     setBusy(true)
@@ -135,9 +134,17 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
       const csvRows = parseScoreCsv(text)
       if (!csvRows.length) throw new Error('No rows found in that CSV.')
 
+      const effectiveTotalMarks = totalMarks && Number(totalMarks) > 0
+        ? Number(totalMarks)
+        : computeTotalMarksFromCsv(csvRows)
+      if (!effectiveTotalMarks) {
+        throw new Error('Enter Total Marks — the CSV has no usable Total Score column to take it from.')
+      }
+      const totalMarksFromCsv = !totalMarks || Number(totalMarks) <= 0
+
       const examDate = computeExamDate(csvRows)
       const { rows, unmatchedCsvNames } = matchAndBuildRows({
-        roster: studentList, csvRows, classNum, subject, topicName: topic, totalMarks, examDate,
+        roster: studentList, csvRows, classNum, subject, topicName: topic, totalMarks: effectiveTotalMarks, examDate,
       })
       if (!rows.length) throw new Error(`No Class ${classNum} students found in the roster.`)
 
@@ -150,7 +157,7 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
         .eq('date', examDate)
       if (dupErr) throw dupErr
 
-      setPreview({ rows, unmatchedCsvNames, examDate, duplicateCount: existing?.length || 0 })
+      setPreview({ rows, unmatchedCsvNames, examDate, totalMarks: effectiveTotalMarks, totalMarksFromCsv, duplicateCount: existing?.length || 0 })
       setStage('preview')
     } catch (err) {
       setError(err.message || 'Failed to read that file.')
@@ -162,7 +169,7 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
     setBusy(true)
     setError('')
     try {
-      const { rows, examDate } = preview
+      const { rows, examDate, totalMarks: effectiveTotalMarks } = preview
       const { data: inserted, error: insertErr } = await supabase.from('student_scores').insert(rows).select()
       if (insertErr) throw insertErr
 
@@ -170,7 +177,7 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
       const scoreCsv = buildScoreCsv(rows, subject)
       const attendanceCsv = buildAttendanceCsv(rows, sourceIdByStudentId)
       const fileTag = `${topic} class ${classNum} subject ${subject}`
-      const message = `Classpro\n\nTopic:\n${topic}\n\nClass:\n${classNum}\n\nSubject:\n${subject}\n\nExam On:\n${examDate}\n\nMin Percentage:\n${minPercentage}\n\nTotal Marks:\n${totalMarks}`
+      const message = `Classpro\n\nTopic:\n${topic}\n\nClass:\n${classNum}\n\nSubject:\n${subject}\n\nExam On:\n${examDate}\n\nMin Percentage:\n${minPercentage}\n\nTotal Marks:\n${effectiveTotalMarks}`
 
       let emailOk = true
       try {
@@ -183,7 +190,7 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
             message,
             examDate,
             minPercentage,
-            totalMarks,
+            totalMarks: effectiveTotalMarks,
             scoreCsv: { filename: `Score_classpro ${fileTag}.csv`, content: toBase64(scoreCsv) },
             attendanceCsv: { filename: `Attendance_classpro ${fileTag}.csv`, content: toBase64(attendanceCsv) },
           }),
@@ -270,8 +277,8 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-1.5">Total Marks</p>
-                <input type="number" min="1" value={totalMarks} onChange={(e) => setTotalMarks(e.target.value)}
+                <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-1.5">Total Marks (optional)</p>
+                <input type="number" min="1" placeholder="From CSV" value={totalMarks} onChange={(e) => setTotalMarks(e.target.value)}
                   className={inputClass} onFocus={focusGold} onBlur={blurGold} />
               </div>
               <div>
@@ -373,7 +380,7 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
               const matched = preview.rows.filter((r) => !r.is_absent)
               const absent = preview.rows.filter((r) => r.is_absent)
               return (
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-2 gap-3">
                   <div className="bg-gray-50 rounded-lg px-3 py-2.5 text-center">
                     <p className="text-2xl font-bold text-gray-800">{matched.length}</p>
                     <p className="text-[11px] text-gray-500 font-medium">Scored</p>
@@ -385,6 +392,12 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
                   <div className="bg-gray-50 rounded-lg px-3 py-2.5 text-center">
                     <p className="text-2xl font-bold text-gray-800">{preview.examDate || '—'}</p>
                     <p className="text-[11px] text-gray-500 font-medium">Exam Date</p>
+                  </div>
+                  <div className="bg-gray-50 rounded-lg px-3 py-2.5 text-center">
+                    <p className="text-2xl font-bold text-gray-800">{preview.totalMarks}</p>
+                    <p className="text-[11px] text-gray-500 font-medium">
+                      Total Marks{preview.totalMarksFromCsv ? ' (from CSV)' : ''}
+                    </p>
                   </div>
                 </div>
               )
