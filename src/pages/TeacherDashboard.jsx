@@ -1020,7 +1020,7 @@ export default function TeacherDashboard() {
                 { k: 'analysis', label: 'Analysis', icon: '📊' },
                 { k: 'tests',    label: 'Tests',    icon: '📋' },
                 { k: 'toppers',  label: 'Toppers',  icon: '🏆' },
-                { k: 'updateReport', label: 'Update Report', icon: '📝' },
+                { k: 'updateReport', label: 'Add Exams', icon: '📝' },
                 { k: 'assignments', label: 'Worksheets', icon: '📌' },
                 { k: 'worksheetInsights', label: 'Worksheet Performance', icon: '📈' },
                 { k: 'manage',   label: 'Other',    icon: '⚙️' },

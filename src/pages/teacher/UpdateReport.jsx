@@ -405,7 +405,7 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="px-5 py-4 border-b" style={{ background: NAV }}>
-          <p className="font-semibold text-gray-800">Update Report</p>
+          <p className="font-semibold text-gray-800">Add Exams</p>
           <p className="text-xs text-gray-500 mt-0.5">
             {queuedItemId
               ? `Editing queued file: ${file?.name}`
