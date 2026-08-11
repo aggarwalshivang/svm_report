@@ -197,7 +197,7 @@ export default function AddExamsSheet({ studentList, onInserted, teacherEmail })
             </div>
             <input type="text" placeholder="Search student…" value={search} onChange={(e) => setSearch(e.target.value)}
               className={`${inputClass} mb-2`} onFocus={focusGold} onBlur={blurGold} />
-            <div className="border border-gray-100 rounded-lg divide-y divide-gray-50 max-h-96 overflow-y-auto">
+            <div className="table-scroll border border-gray-100 rounded-lg divide-y divide-gray-50 max-h-96 overflow-y-auto">
               {filteredRoster.map((s) => {
                 const entry = entryFor(s.student_id)
                 return (

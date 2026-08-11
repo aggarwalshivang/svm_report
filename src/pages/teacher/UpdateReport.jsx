@@ -448,7 +448,7 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
 
       {resolvingDevices && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center sm:p-4" onClick={() => setResolvingDevices(false)}>
-          <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-lg max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+          <div className="table-scroll bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-lg max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="sticky top-0 bg-white border-b px-5 py-4 z-10">
               <p className="font-semibold text-gray-800">Shared device submissions found</p>
               <p className="text-xs text-gray-500 mt-1">
