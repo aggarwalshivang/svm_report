@@ -142,11 +142,11 @@ export default function UpdateReport({ studentList, onInserted }) {
           <form onSubmit={handlePreview} className="p-5 space-y-4">
             <div>
               <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-1.5">Class</p>
-              <div className="flex gap-2">
+              <div className="flex bg-gray-50 rounded-lg border border-gray-200 p-1 gap-1 w-fit">
                 {['9', '10'].map((c) => (
                   <button key={c} type="button" onClick={() => changeClass(c)}
-                    className="px-4 py-1.5 rounded-lg text-sm font-medium transition"
-                    style={classNum === c ? { background: GOLD, color: 'white' } : { background: '#f9fafb', color: 'var(--text)', border: '1px solid #e5e7eb' }}
+                    className="px-4 py-1.5 rounded-md text-sm font-medium transition"
+                    style={classNum === c ? { background: GOLD, color: 'white' } : { color: 'var(--text)' }}
                   >
                     Class {c}
                   </button>
@@ -156,11 +156,11 @@ export default function UpdateReport({ studentList, onInserted }) {
 
             <div>
               <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-1.5">Subject</p>
-              <div className="flex gap-2">
+              <div className="flex bg-gray-50 rounded-lg border border-gray-200 p-1 gap-1 w-fit">
                 {['Science', 'Maths'].map((s) => (
                   <button key={s} type="button" onClick={() => changeSubject(s)}
-                    className="px-4 py-1.5 rounded-lg text-sm font-medium transition"
-                    style={subject === s ? { background: GOLD, color: 'white' } : { background: '#f9fafb', color: 'var(--text)', border: '1px solid #e5e7eb' }}
+                    className="px-4 py-1.5 rounded-md text-sm font-medium transition"
+                    style={subject === s ? { background: GOLD, color: 'white' } : { color: 'var(--text)' }}
                   >
                     {s}
                   </button>
@@ -266,8 +266,8 @@ export default function UpdateReport({ studentList, onInserted }) {
                 {busy ? 'Saving…' : preview.duplicateCount > 0 ? 'Confirm Anyway & Send' : 'Confirm & Send'}
               </button>
               <button type="button" onClick={() => setStage('form')} disabled={busy}
-                className="text-sm font-semibold px-5 py-2.5 rounded-lg transition disabled:opacity-50"
-                style={{ background: '#f3f4f6', color: 'var(--text)' }}
+                className="text-sm font-semibold px-5 py-2.5 rounded-lg bg-gray-100 transition disabled:opacity-50"
+                style={{ color: 'var(--text)' }}
               >
                 Back
               </button>
