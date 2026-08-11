@@ -1,0 +1,85 @@
+// Topic option lists, copied byte-for-byte from the n8n "UPDATE REPORT" form's
+// dropdowns (including its mojibake, e.g. "Euclidâs" and stray double-spaces).
+// These strings are already stored verbatim in existing student_scores.topic_name
+// rows, which the Analysis/Chapter tabs group on as an exact-match key — "fixing"
+// the spelling here would make a topic's own history look like two different
+// chapters. Keep new selections byte-identical to old ones.
+export const REPORT_TOPICS = {
+  9: {
+    Science: [
+      'Exploration: Entering the World of Secondary Science',
+      'Cell: The Building Block of Life',
+      'Tissues in Action',
+      'Describing Motion Around  Us',
+      'Exploring Mixtures and their Separation',
+      'How Forces Affect Motion',
+      'Work, Energy, and Simple Machines',
+      'Journey Inside the Atom',
+      'Atomic Foundations of Matter',
+      'Sound Waves: Characteristics and Applications',
+      'Reproduction: How Life Continues',
+      'Patterns in Life: Diversity and Classification',
+      'Earth as a System: Energy, Matter, and Life',
+      'Measurement â Foundation of Science',
+      'Understanding Motion through Experience ',
+      'Newtonâs Laws of Motion',
+      'The Geometry of Power â Advanced Simple Machines',
+      'Work and Energy',
+      'Structure of Atom',
+      'Chemical Bonding ',
+      'Mixtures and their Separation',
+      'Microscope and Microscopy',
+      'Engineering Life: Miracles in Biotechnology ',
+    ],
+    Maths: [
+      'Orienting Yourself: The Use of Coordinates',
+      ' Introduction to Linear Polynomials',
+      'The World of Numbers',
+      'Exploring Algebraic Identities',
+      'Introduction to Euclidâs Geometry',
+      'Iâm Up and Down, and Round and Round',
+      'Measuring Space:  Perimeter and Area',
+      'The Mathematics of Maybe: Introduction to Probability',
+      'Predicting What Comes Next: Exploring Sequences and Progression',
+      'Sets',
+      'Logarithms',
+    ],
+  },
+  10: {
+    Science: [
+      'Chemical Reactions and Equations',
+      'Acids, Bases and Salts',
+      'Metals and Non-metals',
+      'Carbon and its Compounds',
+      'Life Processes',
+      'Control and Coordination',
+      'How do Organisms Reproduce?',
+      'Heredity',
+      'Light â Reflection and Refraction',
+      'The Human Eye and the Colourful World',
+      'Electricity',
+      'Magnetic Effects of Electric Current',
+      'Our Environment',
+      'Sources of Energy',
+    ],
+    Maths: [
+      'Real Numbers',
+      'Polynomials',
+      'Pair of Linear Equations in Two Variables',
+      'Quadratic Equations',
+      'Arithmetic Progressions',
+      'Triangles',
+      'Coordinate Geometry',
+      'Introduction to Trigonometry',
+      'Some Applications of Trigonometry',
+      'Circles',
+      'Constructions',
+      'Areas Related to Circles',
+      'Surface Areas and Volumes',
+      'Statistics',
+      'Probability',
+    ],
+  },
+}
+
+export const MIN_PERCENTAGE_OPTIONS = ['10', '20', '30', '40', '50', '60']

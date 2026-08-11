@@ -1,0 +1,67 @@
+{
+  "name": "UPDATE REPORT - Mail Only",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "svm-update-report-mail",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "id": "b0d0c8e0-0000-4000-8000-000000000001",
+      "name": "Webhook",
+      "webhookId": "svm-update-report-mail"
+    },
+    {
+      "parameters": {
+        "jsCode": "// The teacher dashboard already parsed the CSV, matched students,\n// computed scores, and wrote student_scores itself. All this workflow\n// does is turn the two base64 CSVs it sends into binary attachments for\n// the Gmail node below.\nconst body = $json.body ?? $json;\n\nreturn [{\n  json: {\n    to: body.to,\n    subject: body.subject,\n    message: body.message,\n  },\n  binary: {\n    scoreCsv: {\n      data: body.scoreCsv.content,\n      mimeType: 'text/csv',\n      fileName: body.scoreCsv.filename,\n    },\n    attendanceCsv: {\n      data: body.attendanceCsv.content,\n      mimeType: 'text/csv',\n      fileName: body.attendanceCsv.filename,\n    },\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [320, 0],
+      "id": "b0d0c8e0-0000-4000-8000-000000000002",
+      "name": "Decode CSV attachments"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.message }}",
+        "options": {
+          "appendAttribution": false,
+          "attachmentsUi": {
+            "attachmentsBinary": [
+              { "property": "scoreCsv" },
+              { "property": "attendanceCsv" }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [640, 0],
+      "id": "b0d0c8e0-0000-4000-8000-000000000003",
+      "name": "Send a message",
+      "webhookId": "b0d0c8e0-0000-4000-8000-000000000004",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "RPscvE02hMKNu50t",
+          "name": "admin Gmail account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Decode CSV attachments", "type": "main", "index": 0 }]]
+    },
+    "Decode CSV attachments": {
+      "main": [[{ "node": "Send a message", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" }
+}

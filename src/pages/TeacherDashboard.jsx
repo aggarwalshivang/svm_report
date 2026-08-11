@@ -10,6 +10,7 @@ import {
   computeSubmissionPerformance, aggregateChapterStats, aggregateSubjectStats,
   topRecurringIssues, classifyChapters, buildSuggestion,
 } from '../lib/worksheetAnalysis'
+import UpdateReport from './teacher/UpdateReport'
 
 const GOLD = 'var(--gold)'
 const NAV  = 'var(--nav)'
@@ -1019,6 +1020,7 @@ export default function TeacherDashboard() {
                 { k: 'analysis', label: 'Analysis', icon: '📊' },
                 { k: 'tests',    label: 'Tests',    icon: '📋' },
                 { k: 'toppers',  label: 'Toppers',  icon: '🏆' },
+                { k: 'updateReport', label: 'Update Report', icon: '📝' },
                 { k: 'assignments', label: 'Worksheets', icon: '📌' },
                 { k: 'worksheetInsights', label: 'Worksheet Performance', icon: '📈' },
                 { k: 'manage',   label: 'Other',    icon: '⚙️' },
@@ -1043,6 +1045,7 @@ export default function TeacherDashboard() {
           <div className="flex-1 min-w-0 space-y-4">
 
             {/* Filter bar (no view toggle) */}
+            {view !== 'updateReport' && (
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 px-3 py-2.5 flex flex-wrap gap-2 items-center">
               {/* Class filter */}
               {view !== 'assignments' && (
@@ -1146,6 +1149,15 @@ export default function TeacherDashboard() {
                 {view === 'students' ? `${filtered.length} students` : view === 'tests' ? `${filteredTests.length} tests` : view === 'manage' ? `${studentList.length} students` : view === 'assignments' ? `${filteredAssignments.length} worksheets` : ''}
               </span>
             </div>
+            )}
+
+        {/* Update Report tab */}
+        {view === 'updateReport' && (
+          <UpdateReport
+            studentList={studentList}
+            onInserted={(rows) => setAllScores((prev) => [...prev, ...rows])}
+          />
+        )}
 
         {/* Analysis view */}
         {view === 'analysis' && (() => {

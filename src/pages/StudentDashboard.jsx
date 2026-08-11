@@ -1043,9 +1043,17 @@ function ChapterBarChart({ topics }) {
 
 const MAX_FILE_BYTES = 20 * 1024 * 1024
 
+// "Failed to send a request to the Edge Function" is supabase-js's generic
+// wrapper for any fetch()-level failure (dropped connection, DNS hiccup, a
+// mobile network handoff mid-upload) — nothing app-specific went wrong, so a
+// bare retry after a short pause resolves it far more often than not. Real
+// application errors (bad scan, rejected file, etc.) never hit this path.
+const MAX_UPLOAD_ATTEMPTS = 3
+
 function AssignmentCard({ a, session, onSubmitted }) {
   const [file, setFile] = useState(null)
   const [uploading, setUploading] = useState(false)
+  const [retryAttempt, setRetryAttempt] = useState(0)
   const [error, setError] = useState('')
   // Not status.key !== 'completed' — that flag also flips true the moment a
   // submission/feedback row exists at all, which would make this permanently
@@ -1067,21 +1075,30 @@ function AssignmentCard({ a, session, onSubmitted }) {
     if (!file) return
     setUploading(true)
     setError('')
-    const form = new FormData()
-    form.append('file', file)
-    form.append('assignment_id', a.id)
-    form.append('student_id', session.studentId)
-    form.append('student_name', session.studentName)
-    form.append('class', session.class)
-    form.append('portion', a.portion || a.title || '')
-    form.append('folder', a.drive_folder_id || '')
-    form.append('worksheet', a.link || '')
-    form.append('assignment_name', a.title || '')
-    form.append('subject', a.subject || '')
 
-    const { data, error: fnErr } = await supabase.functions.invoke('submit-worksheet', { body: form })
-    setUploading(false)
-    if (fnErr || data?.ok === false) {
+    for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt++) {
+      setRetryAttempt(attempt)
+      const form = new FormData()
+      form.append('file', file)
+      form.append('assignment_id', a.id)
+      form.append('student_id', session.studentId)
+      form.append('student_name', session.studentName)
+      form.append('class', session.class)
+      form.append('portion', a.portion || a.title || '')
+      form.append('folder', a.drive_folder_id || '')
+      form.append('worksheet', a.link || '')
+      form.append('assignment_name', a.title || '')
+      form.append('subject', a.subject || '')
+
+      const { data, error: fnErr } = await supabase.functions.invoke('submit-worksheet', { body: form })
+      if (!fnErr && data?.ok !== false) {
+        setUploading(false)
+        setRetryAttempt(0)
+        setFile(null)
+        onSubmitted()
+        return
+      }
+
       // On a non-2xx response supabase-js sets `data` to null and buries the
       // function's actual JSON error body (from submit-worksheet's fail())
       // inside `error.context`, a raw Response — without reading it back out
@@ -1090,18 +1107,22 @@ function AssignmentCard({ a, session, onSubmitted }) {
       if (!message && fnErr?.context?.json) {
         try { message = (await fnErr.context.json())?.error } catch { /* not JSON */ }
       }
-      // supabase-js's own "Failed to send a request to the Edge Function" is
-      // a raw network-level failure (request never reached Supabase, or the
-      // connection dropped) — surface it as an actionable retry hint instead
-      // of the confusing internal wording.
-      if (!message && fnErr?.message?.includes('Failed to send a request')) {
-        message = 'Connection issue while uploading. Please check your internet connection and try again.'
+      const isNetworkFailure = !message && fnErr?.message?.includes('Failed to send a request')
+
+      if (isNetworkFailure && attempt < MAX_UPLOAD_ATTEMPTS) {
+        await new Promise((r) => setTimeout(r, attempt * 1500))
+        continue
       }
-      setError(message || fnErr?.message || 'Upload failed. Please try again.')
+
+      setUploading(false)
+      setRetryAttempt(0)
+      setError(
+        isNetworkFailure
+          ? 'Connection issue while uploading, even after retrying. Please check your internet connection and try again.'
+          : (message || fnErr?.message || 'Upload failed. Please try again.')
+      )
       return
     }
-    setFile(null)
-    onSubmitted()
   }
 
   return (
@@ -1167,12 +1188,17 @@ function AssignmentCard({ a, session, onSubmitted }) {
             style={{ background: GOLD }}
           >
             {uploading
-              ? 'Uploading…'
+              ? (retryAttempt > 1 ? `Retrying… (${retryAttempt}/${MAX_UPLOAD_ATTEMPTS})` : 'Uploading…')
               : (a.deadline && new Date(a.deadline) < new Date())
                 ? 'Submit late'
                 : 'Submit'}
           </button>
         </div>
+      )}
+      {uploading && retryAttempt > 1 && (
+        <p className="text-xs font-medium" style={{ color: '#b45309' }}>
+          ⚠️ Connection issue — retrying upload ({retryAttempt}/{MAX_UPLOAD_ATTEMPTS})…
+        </p>
       )}
       {error && <p className="text-xs text-red-500">{error}</p>}
     </div>
