@@ -9,6 +9,11 @@ import { parseScoreCsv, computeExamDate, computeTotalMarksFromCsv, matchAndBuild
 // of known shared-device emails (see scripts/create-report-shared-device-emails-table.sql);
 // who really submitted under one varies every time, so it's never auto-matched.
 const SHARED_DEVICE_EMAILS_TABLE = 'report_shared_device_emails'
+// CSVs n8n pushes in via the report-csv-webhook edge function (see
+// supabase/functions/report-csv-webhook/index.ts) land here for a teacher
+// to review/edit/upload or reject, instead of downloading from email and
+// browsing to the file by hand.
+const CSV_QUEUE_TABLE = 'report_csv_queue'
 
 function downloadTextFile(filename, content) {
   const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' })
@@ -81,9 +86,20 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
   const [deviceAssignments, setDeviceAssignments] = useState({}) // rowIndex -> student_id
   const [resolvingDevices, setResolvingDevices] = useState(false)
 
+  // CSVs pushed in by n8n, waiting for a teacher to load/edit/upload or reject.
+  const [queuedItems, setQueuedItems] = useState([])
+  const [queuedItemId, setQueuedItemId] = useState(null) // which queue row (if any) the current form came from
+  const [rejectingId, setRejectingId] = useState(null)
+
   useEffect(() => {
     supabase.from(SHARED_DEVICE_EMAILS_TABLE).select('*').then(({ data }) => setSharedDeviceEmails(data || []))
+    fetchQueue()
   }, [])
+
+  async function fetchQueue() {
+    const { data } = await supabase.from(CSV_QUEUE_TABLE).select('*').order('received_at', { ascending: true })
+    setQueuedItems(data || [])
+  }
 
   const topics = REPORT_TOPICS[classNum]?.[subject] || []
   const classRoster = studentList.filter((s) => Number(s.class) === Number(classNum))
@@ -91,10 +107,26 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
   function changeClass(c) { setClassNum(c); setTopic('') }
   function changeSubject(s) { setSubject(s); setTopic('') }
 
+  // Shared by both the manual file picker and loading a queued CSV.
+  function loadCsvRows(rows) {
+    setCsvRows(rows)
+    setDeviceRows([])
+    setDeviceAssignments({})
+    const knownEmails = new Set(sharedDeviceEmails.map((d) => d.email.toLowerCase()))
+    const flagged = rows
+      .map((r, rowIndex) => ({ ...r, rowIndex }))
+      .filter((r) => r.learnerEmail && knownEmails.has(r.learnerEmail.toLowerCase()))
+    if (flagged.length) {
+      setDeviceRows(flagged)
+      setResolvingDevices(true)
+    }
+  }
+
   async function pickFile(e) {
     const f = e.target.files?.[0] || null
     setError('')
     setFile(f)
+    setQueuedItemId(null)
     setCsvRows([])
     setDeviceRows([])
     setDeviceAssignments({})
@@ -102,20 +134,27 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
 
     try {
       const text = await f.text()
-      const rows = parseScoreCsv(text)
-      setCsvRows(rows)
-
-      const knownEmails = new Set(sharedDeviceEmails.map((d) => d.email.toLowerCase()))
-      const flagged = rows
-        .map((r, rowIndex) => ({ ...r, rowIndex }))
-        .filter((r) => r.learnerEmail && knownEmails.has(r.learnerEmail.toLowerCase()))
-      if (flagged.length) {
-        setDeviceRows(flagged)
-        setResolvingDevices(true)
-      }
+      loadCsvRows(parseScoreCsv(text))
     } catch {
       // Preview will surface a proper "couldn't read that file" error.
     }
+  }
+
+  function loadQueuedItem(item) {
+    setError('')
+    setPreview(null)
+    setStage('form')
+    setFile({ name: item.filename })
+    setQueuedItemId(item.id)
+    loadCsvRows(parseScoreCsv(item.csv_content))
+  }
+
+  async function rejectQueuedItem(item) {
+    setRejectingId(item.id)
+    await supabase.from(CSV_QUEUE_TABLE).delete().eq('id', item.id)
+    setQueuedItems((prev) => prev.filter((q) => q.id !== item.id))
+    if (queuedItemId === item.id) resetForm()
+    setRejectingId(null)
   }
 
   async function markAsSharedDevice(email) {
@@ -292,6 +331,12 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
       }
 
       onInserted?.(inserted || rows)
+
+      if (queuedItemId) {
+        await supabase.from(CSV_QUEUE_TABLE).delete().eq('id', queuedItemId)
+        setQueuedItems((prev) => prev.filter((q) => q.id !== queuedItemId))
+      }
+
       setEmailWarning(emailOk ? '' : 'Scores were saved, but the report email failed to send.')
       setStage('done')
     } catch (err) {
@@ -307,6 +352,7 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
     setCsvRows([])
     setDeviceRows([])
     setDeviceAssignments({})
+    setQueuedItemId(null)
     setTopic('')
     setTotalMarks('')
     setError('')
@@ -315,10 +361,51 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
 
   return (
     <div className="space-y-4 max-w-2xl">
+      {queuedItems.length > 0 && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+          <div className="px-5 py-4 border-b flex items-center justify-between" style={{ background: NAV }}>
+            <div>
+              <p className="font-semibold text-gray-800">Pending CSV Uploads</p>
+              <p className="text-xs text-gray-500 mt-0.5">Sent in automatically — load one to review/edit, or reject it.</p>
+            </div>
+            <button type="button" onClick={fetchQueue} className="text-xs font-semibold" style={{ color: GOLD }}>
+              ↻ Refresh
+            </button>
+          </div>
+          <div className="divide-y divide-gray-50">
+            {queuedItems.map((item) => (
+              <div key={item.id} className="px-5 py-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-gray-800 truncate">{item.filename}</p>
+                  <p className="text-xs text-gray-400">{new Date(item.received_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}</p>
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <button type="button" onClick={() => loadQueuedItem(item)}
+                    className="text-xs font-semibold px-3 py-1.5 rounded-lg text-white transition"
+                    style={{ background: queuedItemId === item.id ? '#16a34a' : GOLD }}
+                  >
+                    {queuedItemId === item.id ? '✓ Loaded' : 'Load'}
+                  </button>
+                  <button type="button" onClick={() => rejectQueuedItem(item)} disabled={rejectingId === item.id}
+                    className="text-xs font-semibold px-3 py-1.5 rounded-lg text-red-500 hover:bg-red-50 transition disabled:opacity-50"
+                  >
+                    {rejectingId === item.id ? '…' : 'Reject'}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="px-5 py-4 border-b" style={{ background: NAV }}>
           <p className="font-semibold text-gray-800">Update Report</p>
-          <p className="text-xs text-gray-500 mt-0.5">Upload a Learnyst score export to record scores and email the report.</p>
+          <p className="text-xs text-gray-500 mt-0.5">
+            {queuedItemId
+              ? `Editing queued file: ${file?.name}`
+              : 'Upload a Learnyst score export to record scores and email the report.'}
+          </p>
         </div>
 
         {stage === 'form' && (
