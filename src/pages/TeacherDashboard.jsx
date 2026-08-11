@@ -10,7 +10,7 @@ import {
   computeSubmissionPerformance, aggregateChapterStats, aggregateSubjectStats,
   topRecurringIssues, classifyChapters, buildSuggestion,
 } from '../lib/worksheetAnalysis'
-import UpdateReport from './teacher/UpdateReport'
+import AddExams from './teacher/AddExams'
 
 const GOLD = 'var(--gold)'
 const NAV  = 'var(--nav)'
@@ -1151,9 +1151,9 @@ export default function TeacherDashboard() {
             </div>
             )}
 
-        {/* Update Report tab */}
+        {/* Add Exams tab */}
         {view === 'updateReport' && (
-          <UpdateReport
+          <AddExams
             studentList={studentList}
             teacherEmail={session?.email}
             onInserted={(rows) => setAllScores((prev) => [...prev, ...rows])}

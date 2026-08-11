@@ -1,7 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { REPORT_TOPICS, MIN_PERCENTAGE_OPTIONS } from '../../constants/reportTopics'
-import { parseScoreCsv, computeExamDate, computeTotalMarksFromCsv, matchAndBuildRows, buildScoreCsv, buildAttendanceCsv } from '../../lib/updateReport'
+import { parseScoreCsv, computeExamDate, computeTotalMarksFromCsv, matchAndBuildRows } from '../../lib/updateReport'
+import { downloadTextFile, checkDuplicateTest, buildAndDownloadReportCsvs, insertScoreRows, sendReportEmail } from '../../lib/reportSubmit'
+import { GOLD, NAV, inputClass, focusGold, blurGold } from './formStyles'
+import RecipientField from './RecipientField'
 
 // Some students borrow a shared/temp device when they forget their own for
 // a Learnyst test — the export then shows that device's own registered
@@ -14,40 +17,7 @@ const SHARED_DEVICE_EMAILS_TABLE = 'report_shared_device_emails'
 // to review/edit/upload or reject, instead of downloading from email and
 // browsing to the file by hand.
 const CSV_QUEUE_TABLE = 'report_csv_queue'
-
-function downloadTextFile(filename, content) {
-  const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  URL.revokeObjectURL(url)
-}
-
-const GOLD = 'var(--gold)'
-const NAV = 'var(--nav)'
 const DEFAULT_RECIPIENT = 'svmambala@gmail.com'
-// Same send-action-otp/verify-action-otp pair TeacherDashboard already uses
-// to gate delete-student/delete-test/reopen-submissions — 'change-report-recipient'
-// must be a known purpose in supabase/functions/send-action-otp/index.ts.
-const CHANGE_RECIPIENT_OTP_PURPOSE = 'change-report-recipient'
-const OTP_RESEND_COOLDOWN = 45 // seconds, must match send-action-otp's cooldown
-// A trimmed n8n workflow (see n8n/update-report-mail-webhook.json) must be
-// imported and activated at this path — it only attaches the two CSVs
-// below to a Gmail message, all the parsing/matching/DB-write already
-// happened here.
-const N8N_UPDATE_REPORT_WEBHOOK = 'https://n8n.saraswatividyamandir.com/webhook/classpro-mail-send'
-
-function toBase64(str) {
-  return btoa(unescape(encodeURIComponent(str)))
-}
-
-const inputClass = 'w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none bg-white'
-function focusGold(e) { e.target.style.boxShadow = `0 0 0 2px ${GOLD}40` }
-function blurGold(e) { e.target.style.boxShadow = '' }
 
 export default function UpdateReport({ studentList, onInserted, teacherEmail }) {
   const [classNum, setClassNum] = useState('9')
@@ -62,20 +32,6 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [emailWarning, setEmailWarning] = useState('')
-
-  // Recipient is locked by default — changing it requires an OTP emailed to
-  // the logged-in teacher's own account (send-action-otp/verify-action-otp),
-  // same gate TeacherDashboard uses for delete-student/delete-test/etc.
-  const [changingRecipient, setChangingRecipient] = useState(false)
-  const [newRecipient, setNewRecipient] = useState('')
-  const [otpStep, setOtpStep] = useState('idle') // 'idle' | 'sent'
-  const [otpCode, setOtpCode] = useState('')
-  const [otpSending, setOtpSending] = useState(false)
-  const [otpVerifying, setOtpVerifying] = useState(false)
-  const [otpError, setOtpError] = useState('')
-  const [otpCooldown, setOtpCooldown] = useState(0)
-  const cooldownRef = useRef(null)
-  useEffect(() => () => clearInterval(cooldownRef.current), [])
 
   // Shared-device handling: parsed as soon as a file is chosen (not gated
   // behind Preview), so the "who really took this?" popup can appear
@@ -168,69 +124,6 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
     }
   }
 
-  function startOtpCooldown() {
-    setOtpCooldown(OTP_RESEND_COOLDOWN)
-    clearInterval(cooldownRef.current)
-    cooldownRef.current = setInterval(() => {
-      setOtpCooldown((c) => {
-        if (c <= 1) { clearInterval(cooldownRef.current); return 0 }
-        return c - 1
-      })
-    }, 1000)
-  }
-
-  function openChangeRecipient() {
-    setChangingRecipient(true)
-    setNewRecipient('')
-    setOtpStep('idle')
-    setOtpCode('')
-    setOtpError('')
-  }
-
-  function cancelChangeRecipient() {
-    setChangingRecipient(false)
-    setOtpStep('idle')
-    setOtpCode('')
-    setNewRecipient('')
-    setOtpError('')
-    clearInterval(cooldownRef.current)
-    setOtpCooldown(0)
-  }
-
-  async function sendRecipientOtp() {
-    setOtpError('')
-    if (!/^\S+@\S+\.\S+$/.test(newRecipient.trim())) {
-      setOtpError('Enter a valid email address.')
-      return
-    }
-    setOtpSending(true)
-    const { data, error: fnErr } = await supabase.functions.invoke('send-action-otp', {
-      body: { purpose: CHANGE_RECIPIENT_OTP_PURPOSE },
-    })
-    setOtpSending(false)
-    if (fnErr || data?.ok === false) {
-      setOtpError(data?.error || fnErr?.message || 'Failed to send code.')
-      return
-    }
-    startOtpCooldown()
-    setOtpStep('sent')
-  }
-
-  async function verifyRecipientOtp() {
-    setOtpError('')
-    setOtpVerifying(true)
-    const { data, error: fnErr } = await supabase.functions.invoke('verify-action-otp', {
-      body: { code: otpCode.trim(), purpose: CHANGE_RECIPIENT_OTP_PURPOSE },
-    })
-    setOtpVerifying(false)
-    if (fnErr || data?.ok === false) {
-      setOtpError(data?.error || fnErr?.message || 'Invalid or expired code.')
-      return
-    }
-    setRecipient(newRecipient.trim())
-    cancelChangeRecipient()
-  }
-
   async function handlePreview(e) {
     e.preventDefault()
     setError('')
@@ -270,25 +163,12 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
       })
       if (!rows.length) throw new Error(`No Class ${classNum} students found in the roster.`)
 
-      const { data: existing, error: dupErr } = await supabase
-        .from('student_scores')
-        .select('id')
-        .eq('class', Number(classNum))
-        .eq('subject', subject)
-        .eq('topic_name', topic)
-        .eq('date', examDate)
-      if (dupErr) throw dupErr
-
-      const sourceIdByStudentId = new Map(studentList.map((s) => [s.student_id, s.emails?.[0]?.source_id ?? '']))
-      const scoreCsv = buildScoreCsv(rows, subject)
-      const attendanceCsv = buildAttendanceCsv(rows, sourceIdByStudentId)
-      const fileTag = `${topic} class ${classNum} subject ${subject}`
-      downloadTextFile(`Score_classpro ${fileTag}.csv`, scoreCsv)
-      downloadTextFile(`Attendance_classpro ${fileTag}.csv`, attendanceCsv)
+      const duplicateCount = await checkDuplicateTest({ classNum, subject, topic, examDate })
+      const { scoreCsv, attendanceCsv, fileTag } = buildAndDownloadReportCsvs({ rows, subject, studentList, topic, classNum })
 
       setPreview({
         rows, unmatchedCsvNames, examDate, totalMarks: effectiveTotalMarks, totalMarksFromCsv,
-        duplicateCount: existing?.length || 0, scoreCsv, attendanceCsv, fileTag,
+        duplicateCount, scoreCsv, attendanceCsv, fileTag,
       })
       setStage('preview')
     } catch (err) {
@@ -304,31 +184,11 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
       // Reuse the exact CSVs already built (and downloaded) at Preview time,
       // so what the teacher inspected locally is byte-identical to what gets emailed.
       const { rows, examDate, totalMarks: effectiveTotalMarks, scoreCsv, attendanceCsv, fileTag } = preview
-      const { data: inserted, error: insertErr } = await supabase.from('student_scores').insert(rows).select()
-      if (insertErr) throw insertErr
-
-      const message = `Classpro\n\nTopic:\n${topic}\n\nClass:\n${classNum}\n\nSubject:\n${subject}\n\nExam On:\n${examDate}\n\nMin Percentage:\n${minPercentage}\n\nTotal Marks:\n${effectiveTotalMarks}`
-
-      let emailOk = true
-      try {
-        const res = await fetch(N8N_UPDATE_REPORT_WEBHOOK, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            to: recipient.trim(),
-            subject: `classpro ${fileTag}`,
-            message,
-            examDate,
-            minPercentage,
-            totalMarks: effectiveTotalMarks,
-            scoreCsv: { filename: `Score_classpro ${fileTag}.csv`, content: toBase64(scoreCsv) },
-            attendanceCsv: { filename: `Attendance_classpro ${fileTag}.csv`, content: toBase64(attendanceCsv) },
-          }),
-        })
-        emailOk = res.ok
-      } catch {
-        emailOk = false
-      }
+      const inserted = await insertScoreRows(rows)
+      const emailOk = await sendReportEmail({
+        recipient, topic, classNum, subject, examDate, minPercentage,
+        totalMarks: effectiveTotalMarks, fileTag, scoreCsv, attendanceCsv,
+      })
 
       onInserted?.(inserted || rows)
 
@@ -360,7 +220,7 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
   }
 
   return (
-    <div className="space-y-4 max-w-2xl">
+    <div className="space-y-4">
       {queuedItems.length > 0 && (
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
           <div className="px-5 py-4 border-b flex items-center justify-between" style={{ background: NAV }}>
@@ -405,7 +265,7 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="px-5 py-4 border-b" style={{ background: NAV }}>
-          <p className="font-semibold text-gray-800">Add Exams</p>
+          <p className="font-semibold text-gray-800">Upload CSV</p>
           <p className="text-xs text-gray-500 mt-0.5">
             {queuedItemId
               ? `Editing queued file: ${file?.name}`
@@ -475,79 +335,7 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
               </div>
             </div>
 
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-1.5">Send report to</p>
-              {!changingRecipient ? (
-                <div className="flex items-center gap-2">
-                  <input type="email" value={recipient} disabled readOnly
-                    className={`${inputClass} opacity-60 cursor-not-allowed`} />
-                  <button type="button" onClick={openChangeRecipient}
-                    className="text-xs font-semibold whitespace-nowrap flex-shrink-0" style={{ color: GOLD }}
-                  >
-                    🔒 Change
-                  </button>
-                </div>
-              ) : (
-                <div className="rounded-lg border p-3 space-y-2" style={{ borderColor: 'rgba(200,134,10,0.25)', background: 'rgba(200,134,10,0.06)' }}>
-                  {otpStep === 'idle' ? (
-                    <>
-                      <input type="email" placeholder="New recipient email" value={newRecipient} autoFocus
-                        onChange={(e) => setNewRecipient(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === 'Enter') sendRecipientOtp() }}
-                        className={inputClass} onFocus={focusGold} onBlur={blurGold}
-                      />
-                      <p className="text-[11px] text-gray-500">
-                        A confirmation code will be emailed to your account{teacherEmail ? ` (${teacherEmail})` : ''} to approve this change.
-                      </p>
-                      {otpError && <p className="text-xs text-red-500">{otpError}</p>}
-                      <div className="flex gap-2">
-                        <button type="button" onClick={sendRecipientOtp} disabled={otpSending}
-                          className="text-xs font-semibold px-3 py-1.5 rounded-lg text-white transition disabled:opacity-50"
-                          style={{ background: GOLD }}
-                        >
-                          {otpSending ? 'Sending…' : 'Send Code'}
-                        </button>
-                        <button type="button" onClick={cancelChangeRecipient}
-                          className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-gray-100 transition" style={{ color: 'var(--text)' }}
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <p className="text-xs text-gray-500">
-                        Enter the 6-digit code sent to{teacherEmail ? ` ${teacherEmail}` : ' your account'} to confirm changing the recipient to <span className="font-medium">{newRecipient.trim()}</span>.
-                      </p>
-                      <input type="text" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} autoFocus
-                        value={otpCode}
-                        onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
-                        onKeyDown={(e) => { if (e.key === 'Enter' && otpCode.length === 6) verifyRecipientOtp() }}
-                        placeholder="123456"
-                        className={`${inputClass} tracking-[0.3em] text-center`} onFocus={focusGold} onBlur={blurGold}
-                      />
-                      {otpError && <p className="text-xs text-red-500">{otpError}</p>}
-                      <div className="flex flex-wrap items-center gap-3">
-                        <button type="button" onClick={verifyRecipientOtp} disabled={otpCode.length !== 6 || otpVerifying}
-                          className="text-xs font-semibold px-3 py-1.5 rounded-lg text-white transition disabled:opacity-50"
-                          style={{ background: GOLD }}
-                        >
-                          {otpVerifying ? 'Verifying…' : 'Verify & Update'}
-                        </button>
-                        <button type="button" onClick={sendRecipientOtp} disabled={otpCooldown > 0 || otpSending}
-                          className="text-xs font-medium disabled:text-gray-400" style={{ color: otpCooldown > 0 ? undefined : GOLD }}
-                        >
-                          {otpCooldown > 0 ? `Resend code in ${otpCooldown}s` : 'Resend code'}
-                        </button>
-                        <button type="button" onClick={cancelChangeRecipient} className="text-xs font-semibold" style={{ color: 'var(--text)' }}>
-                          Cancel
-                        </button>
-                      </div>
-                    </>
-                  )}
-                </div>
-              )}
-            </div>
+            <RecipientField recipient={recipient} onChange={setRecipient} teacherEmail={teacherEmail} />
 
             {error && <p className="text-sm text-red-500 font-medium">{error}</p>}
 
