@@ -34,7 +34,7 @@ const OTP_RESEND_COOLDOWN = 45 // seconds, must match send-action-otp's cooldown
 // imported and activated at this path — it only attaches the two CSVs
 // below to a Gmail message, all the parsing/matching/DB-write already
 // happened here.
-const N8N_UPDATE_REPORT_WEBHOOK = 'https://n8n.saraswatividyamandir.com/webhook/svm-update-report-mail'
+const N8N_UPDATE_REPORT_WEBHOOK = 'https://n8n.saraswatividyamandir.com/webhook/classpro-mail-send'
 
 function toBase64(str) {
   return btoa(unescape(encodeURIComponent(str)))

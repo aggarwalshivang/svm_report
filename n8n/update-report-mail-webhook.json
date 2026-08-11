@@ -4,7 +4,7 @@
     {
       "parameters": {
         "httpMethod": "POST",
-        "path": "svm-update-report-mail",
+        "path": "classpro-mail-send",
         "responseMode": "lastNode",
         "options": {}
       },
@@ -13,7 +13,7 @@
       "position": [0, 0],
       "id": "b0d0c8e0-0000-4000-8000-000000000001",
       "name": "Webhook",
-      "webhookId": "svm-update-report-mail"
+      "webhookId": "classpro-mail-send"
     },
     {
       "parameters": {
