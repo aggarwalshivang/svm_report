@@ -380,6 +380,11 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
                   <p className="text-xs text-gray-400">{new Date(item.received_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}</p>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
+                  <button type="button" onClick={() => downloadTextFile(item.filename, item.csv_content)}
+                    className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-gray-100 transition" style={{ color: 'var(--text)' }}
+                  >
+                    ⬇ Download
+                  </button>
                   <button type="button" onClick={() => loadQueuedItem(item)}
                     className="text-xs font-semibold px-3 py-1.5 rounded-lg text-white transition"
                     style={{ background: queuedItemId === item.id ? '#16a34a' : GOLD }}
