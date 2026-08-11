@@ -178,7 +178,12 @@ export default function UpdateReport({ studentList, onInserted }) {
 
             <div>
               <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-1.5">Score file (Learnyst CSV export)</p>
-              <input type="file" accept=".csv,text/csv" onChange={(e) => setFile(e.target.files?.[0] || null)} className="text-sm" />
+              <label className="inline-block text-xs font-medium px-3 py-1.5 rounded-lg border cursor-pointer transition"
+                style={{ borderColor: 'rgba(200,134,10,0.35)', color: GOLD, background: 'rgba(200,134,10,0.06)' }}
+              >
+                {file ? file.name : '📎 Choose CSV'}
+                <input type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+              </label>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
