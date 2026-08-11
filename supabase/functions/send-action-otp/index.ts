@@ -31,6 +31,7 @@ const PURPOSE_COPY: Record<string, { subject: string; verb: string }> = {
   'delete-assignment': { subject: 'Confirm removing a worksheet', verb: 'permanently remove a worksheet and its link' },
   'delete-test': { subject: 'Confirm deleting a test', verb: 'permanently delete a test and every student’s score for it' },
   'reopen-worksheet-submissions': { subject: 'Confirm reopening a worksheet', verb: 'reopen submissions for a worksheet that was closed' },
+  'change-report-recipient': { subject: 'Confirm changing the report recipient', verb: 'change the email address Update Report sends score reports to' },
 }
 
 async function hashCode(code: string) {

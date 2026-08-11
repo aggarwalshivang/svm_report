@@ -1155,6 +1155,7 @@ export default function TeacherDashboard() {
         {view === 'updateReport' && (
           <UpdateReport
             studentList={studentList}
+            teacherEmail={session?.email}
             onInserted={(rows) => setAllScores((prev) => [...prev, ...rows])}
           />
         )}
