@@ -32,6 +32,26 @@ const PURPOSE_COPY: Record<string, { subject: string; verb: string }> = {
   'delete-test': { subject: 'Confirm deleting a test', verb: 'permanently delete a test and every student’s score for it' },
   'reopen-worksheet-submissions': { subject: 'Confirm reopening a worksheet', verb: 'reopen submissions for a worksheet that was closed' },
   'change-report-recipient': { subject: 'Confirm changing the report recipient', verb: 'change the email address Update Report sends score reports to' },
+  'rename-student': { subject: 'Confirm renaming a student', verb: 'rename a student — this updates their name on every score, worksheet submission and feedback record' },
+}
+
+// Escaped separately from the values so a stray '&'/'<' in a student name
+// can't break the email's HTML.
+function escapeHtml(s: string) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+// Optional {label: value} pairs describing exactly what the code is
+// authorizing (e.g. which student, old name -> new name) — rendered into
+// the email so approving the code isn't a blind trust exercise.
+function renderDetails(details: unknown): string {
+  if (!details || typeof details !== 'object') return ''
+  const entries = Object.entries(details as Record<string, unknown>).filter(([, v]) => v != null && v !== '')
+  if (!entries.length) return ''
+  const rows = entries
+    .map(([k, v]) => `<tr><td style="padding:2px 12px 2px 0;color:#6b7280;">${escapeHtml(k)}</td><td style="padding:2px 0;font-weight:600;">${escapeHtml(String(v))}</td></tr>`)
+    .join('')
+  return `<table style="margin:12px 0;border-collapse:collapse;font-size:14px;">${rows}</table>`
 }
 
 async function hashCode(code: string) {
@@ -57,7 +77,7 @@ Deno.serve(async (req) => {
     if (callerErr || !caller?.user?.email) throw new Error('Not authenticated')
     const email = caller.user.email.toLowerCase()
 
-    const { purpose } = await req.json()
+    const { purpose, details } = await req.json()
     const copy = PURPOSE_COPY[purpose]
     if (!copy) throw new Error('Unknown purpose')
 
@@ -96,6 +116,7 @@ Deno.serve(async (req) => {
         to: [email],
         subject: copy.subject,
         html: `<p>Use this code to confirm you want to ${copy.verb}:</p>
+               ${renderDetails(details)}
                <p style="font-size:28px;font-weight:bold;letter-spacing:4px;">${code}</p>
                <p>This code expires in 10 minutes. If you didn't request this, you can ignore this email.</p>`,
       }),

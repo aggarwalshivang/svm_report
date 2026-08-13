@@ -194,6 +194,7 @@ export default function TeacherDashboard() {
   const [savingStudent, setSavingStudent] = useState(false)
   const [deletingStudentId, setDeletingStudentId] = useState(null)
   const [confirmDeleteStudent, setConfirmDeleteStudent] = useState(null)
+  const [confirmRenameStudent, setConfirmRenameStudent] = useState(null) // { student, newName }
   const [expandedStudent, setExpandedStudent] = useState(null)
   const [pendingEmail, setPendingEmail] = useState('')
   const [savingEmail, setSavingEmail] = useState(false)
@@ -1017,15 +1018,22 @@ export default function TeacherDashboard() {
     setSavingPhone(false)
   }
 
+  // Just opens the OTP-gated confirmation — the actual write happens in
+  // updateStudentName, called from ConfirmRenameStudentModal once the code
+  // checks out.
+  function startRenameStudent(student) {
+    const newName = editingNameValue.trim()
+    if (!newName || newName === student.student_name) { setEditingNameStudentId(null); return }
+    setConfirmRenameStudent({ student, newName })
+  }
+
   // student_name is denormalized into student_scores, assignment_submissions
   // and worksheet_feedback too (so historical rows keep reading correctly
   // without a join back to the roster), and worksheet_feedback has no
   // client-writable UPDATE policy at all — so the rename goes through the
   // rename-student Edge Function (service role) rather than a direct
   // .update() here, to actually reach every table in one shot.
-  async function updateStudentName(student) {
-    const newName = editingNameValue.trim()
-    if (!newName || newName === student.student_name) { setEditingNameStudentId(null); return }
+  async function updateStudentName(student, newName) {
     setSavingName(true)
     const { data, error: fnErr } = await supabase.functions.invoke('rename-student', {
       body: { student_id: student.student_id, new_name: newName },
@@ -1044,6 +1052,7 @@ export default function TeacherDashboard() {
       setWorksheetFeedback((prev) => prev.map((s) => (s.student_id === student.student_id ? { ...s, student_name: newName } : s)))
       setEditingNameStudentId(null)
       setEditingNameValue('')
+      setConfirmRenameStudent(null)
       notifyStudentRenameWebhook(oldName, newName, { phone: student.phone, studentClass: student.class })
     }
     setSavingName(false)
@@ -2275,7 +2284,7 @@ function ini(name) {
                                     value={editingNameValue}
                                     onChange={(e) => setEditingNameValue(e.target.value)}
                                     onKeyDown={(e) => {
-                                      if (e.key === 'Enter') updateStudentName(s)
+                                      if (e.key === 'Enter') startRenameStudent(s)
                                       if (e.key === 'Escape') { setEditingNameStudentId(null); setEditingNameValue('') }
                                     }}
                                     className="flex-1 border border-gray-200 rounded-lg px-2 py-1 text-sm focus:outline-none bg-white"
@@ -2283,7 +2292,7 @@ function ini(name) {
                                     onBlur={(e) => e.target.style.boxShadow = ''}
                                   />
                                   <button
-                                    onClick={() => updateStudentName(s)}
+                                    onClick={() => startRenameStudent(s)}
                                     disabled={savingName}
                                     className="text-xs font-semibold flex-shrink-0 disabled:opacity-50"
                                     style={{ color: GOLD }}
@@ -2648,6 +2657,16 @@ function ini(name) {
         />
       )}
 
+      {confirmRenameStudent && (
+        <ConfirmRenameStudentModal
+          student={confirmRenameStudent.student}
+          newName={confirmRenameStudent.newName}
+          teacherEmail={session?.email}
+          onCancel={() => setConfirmRenameStudent(null)}
+          onConfirm={() => updateStudentName(confirmRenameStudent.student, confirmRenameStudent.newName)}
+        />
+      )}
+
       {confirmDeleteAssignment && (
         <ConfirmDeleteAssignmentModal
           assignment={confirmDeleteAssignment}
@@ -2925,7 +2944,10 @@ function ConfirmDeleteStudentModal({ student, teacherEmail, onCancel, onConfirm 
     setError('')
     setSending(true)
     const { data, error: fnErr } = await supabase.functions.invoke('send-action-otp', {
-      body: { purpose: DELETE_OTP_PURPOSE },
+      body: {
+        purpose: DELETE_OTP_PURPOSE,
+        details: { Student: student.student_name, Class: String(student.class), Phone: student.phone || '—' },
+      },
     })
     setSending(false)
     if (fnErr || data?.ok === false) {
@@ -3035,6 +3057,149 @@ function ConfirmDeleteStudentModal({ student, teacherEmail, onCancel, onConfirm 
                 className="text-sm font-semibold px-4 py-2 rounded-lg text-white bg-red-500 hover:bg-red-600 transition disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 {verifying ? 'Verifying…' : 'Delete Student'}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+const RENAME_OTP_PURPOSE = 'rename-student'
+
+function ConfirmRenameStudentModal({ student, newName, teacherEmail, onCancel, onConfirm }) {
+  const [step, setStep] = useState('confirm') // confirm | otp
+  const [code, setCode] = useState('')
+  const [sending, setSending] = useState(false)
+  const [verifying, setVerifying] = useState(false)
+  const [error, setError] = useState('')
+  const [cooldown, setCooldown] = useState(0)
+  const cooldownRef = useRef(null)
+
+  useEffect(() => () => clearInterval(cooldownRef.current), [])
+
+  function startCooldown() {
+    setCooldown(OTP_RESEND_COOLDOWN)
+    clearInterval(cooldownRef.current)
+    cooldownRef.current = setInterval(() => {
+      setCooldown((c) => {
+        if (c <= 1) { clearInterval(cooldownRef.current); return 0 }
+        return c - 1
+      })
+    }, 1000)
+  }
+
+  async function sendCode() {
+    setError('')
+    setSending(true)
+    const { data, error: fnErr } = await supabase.functions.invoke('send-action-otp', {
+      body: {
+        purpose: RENAME_OTP_PURPOSE,
+        details: { Student: student.student_name, 'New name': newName, Class: String(student.class) },
+      },
+    })
+    setSending(false)
+    if (fnErr || data?.ok === false) {
+      setError(data?.error || 'Could not send code. Please try again.')
+      return
+    }
+    startCooldown()
+    setStep('otp')
+  }
+
+  async function verifyAndConfirm() {
+    setError('')
+    setVerifying(true)
+    const { data, error: fnErr } = await supabase.functions.invoke('verify-action-otp', {
+      body: { code: code.trim(), purpose: RENAME_OTP_PURPOSE },
+    })
+    setVerifying(false)
+    if (fnErr || data?.ok === false) {
+      setError(data?.error || 'Invalid or expired code.')
+      return
+    }
+    onConfirm()
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onCancel}>
+      <div
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="text-lg font-bold text-gray-800 mb-1">Rename student?</h3>
+        <p className="text-sm text-gray-500 mb-4">
+          <span className="font-medium text-gray-700">{student.student_name}</span> will become{' '}
+          <span className="font-medium text-gray-700">{newName}</span> on every score, worksheet submission and feedback record.
+        </p>
+
+        {step === 'confirm' ? (
+          <>
+            {error && (
+              <div className="rounded-lg px-3 py-2 text-xs mb-4 bg-red-50 border border-red-200 text-red-600">{error}</div>
+            )}
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={onCancel}
+                className="text-sm font-medium px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={sendCode}
+                disabled={sending}
+                className="text-sm font-semibold px-4 py-2 rounded-lg text-white transition disabled:opacity-40 disabled:cursor-not-allowed"
+                style={{ background: GOLD }}
+              >
+                {sending ? 'Sending code…' : 'Send Confirmation Code'}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="text-xs text-gray-500 mb-2">
+              Enter the 6-digit code sent to <span className="font-medium text-gray-700">{teacherEmail}</span> to rename this student:
+            </p>
+            <input
+              autoFocus
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]{6}"
+              maxLength={6}
+              value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+              onKeyDown={(e) => { if (e.key === 'Enter' && code.length === 6) verifyAndConfirm() }}
+              placeholder="123456"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-2 tracking-[0.3em] text-center focus:outline-none focus:ring-2"
+              style={{ '--tw-ring-color': `${GOLD}40` }}
+            />
+            <button
+              type="button"
+              disabled={cooldown > 0 || sending}
+              onClick={sendCode}
+              className="text-xs font-medium mb-4 disabled:text-gray-400"
+              style={{ color: cooldown > 0 ? undefined : GOLD }}
+            >
+              {cooldown > 0 ? `Resend code in ${cooldown}s` : 'Resend code'}
+            </button>
+            {error && (
+              <div className="rounded-lg px-3 py-2 text-xs mb-4 bg-red-50 border border-red-200 text-red-600">{error}</div>
+            )}
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={onCancel}
+                className="text-sm font-medium px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={verifyAndConfirm}
+                disabled={code.length !== 6 || verifying}
+                className="text-sm font-semibold px-4 py-2 rounded-lg text-white transition disabled:opacity-40 disabled:cursor-not-allowed"
+                style={{ background: GOLD }}
+              >
+                {verifying ? 'Verifying…' : 'Rename Student'}
               </button>
             </div>
           </>
