@@ -16,6 +16,8 @@ const GOLD = 'var(--gold)'
 const NAV  = 'var(--nav)'
 const DARK = 'var(--page-bg)'
 
+const MAX_FILE_BYTES = 20 * 1024 * 1024
+
 const N8N_WEBHOOK_EXAMPLE = `POST https://cexbpkbadthoqbruyjdg.supabase.co/functions/v1/assignment-webhook
 Content-Type: application/json
 x-api-key: <ASSIGNMENT_WEBHOOK_KEY>
@@ -205,6 +207,9 @@ export default function TeacherDashboard() {
   const [editingPhoneStudentId, setEditingPhoneStudentId] = useState(null)
   const [editingPhoneValue, setEditingPhoneValue] = useState('')
   const [savingPhone, setSavingPhone] = useState(false)
+  const [editingNameStudentId, setEditingNameStudentId] = useState(null)
+  const [editingNameValue, setEditingNameValue] = useState('')
+  const [savingName, setSavingName] = useState(false)
   const [creatingLoginId, setCreatingLoginId] = useState(null)
 
   // Assignments tab state — worksheetReport is the public.worksheet_report
@@ -223,6 +228,8 @@ export default function TeacherDashboard() {
   const [assignmentSort, setAssignmentSort] = useState('deadline-desc')
   const [expandedAnalysisId, setExpandedAnalysisId] = useState(null)
   const [markingAllSubmittedId, setMarkingAllSubmittedId] = useState(null)
+  const [uploadingForKey, setUploadingForKey] = useState(null) // `${assignmentId}:${studentId}` while a teacher-side worksheet upload is in flight
+  const [uploadErrorByKey, setUploadErrorByKey] = useState({})
   const [n8nDocsOpen, setN8nDocsOpen] = useState(false)
   const [n8nCopied, setN8nCopied] = useState(false)
   const [sendingList, setSendingList] = useState(null) // 'submitted' | 'unsubmitted' | null
@@ -685,6 +692,15 @@ export default function TeacherDashboard() {
     }
   }
 
+  // n8n has no "rename" action, only add/remove — so a rename is modeled as
+  // removing the old name then (after a short pause, so the two don't race
+  // each other inside the workflow) adding the new one.
+  async function notifyStudentRenameWebhook(oldName, newName, { phone, studentClass }) {
+    await notifyStudentWorksheetWebhook('remove', { name: oldName, phone, studentClass })
+    await new Promise((r) => setTimeout(r, 3000))
+    await notifyStudentWorksheetWebhook('add', { name: newName, phone, studentClass })
+  }
+
   async function sendWorksheetList(status) {
     setSendingList(status)
     setSendListResult(null)
@@ -831,6 +847,65 @@ export default function TeacherDashboard() {
     setMarkingAllSubmittedId(null)
   }
 
+  // Lets a teacher turn in a worksheet PDF on a student's behalf (e.g. a
+  // paper copy handed in physically, or a student without upload access) —
+  // goes through the exact same submit-worksheet Edge Function/n8n grading
+  // path as the student's own upload, just triggered from the teacher side.
+  async function uploadWorksheetForStudent(assignment, student, file) {
+    const key = `${assignment.id}:${student.student_id}`
+    if (file.type !== 'application/pdf') {
+      setUploadErrorByKey((prev) => ({ ...prev, [key]: 'Only PDF files are accepted.' }))
+      return
+    }
+    if (file.size > MAX_FILE_BYTES) {
+      setUploadErrorByKey((prev) => ({ ...prev, [key]: 'File must be under 20 MB.' }))
+      return
+    }
+
+    setUploadingForKey(key)
+    setUploadErrorByKey((prev) => { const next = { ...prev }; delete next[key]; return next })
+
+    const form = new FormData()
+    form.append('file', file)
+    form.append('assignment_id', assignment.id)
+    form.append('student_id', student.student_id)
+    form.append('student_name', student.student_name)
+    form.append('class', assignment.class)
+    form.append('portion', assignment.portion || assignment.title || '')
+    form.append('folder', assignment.drive_folder_id || '')
+    form.append('worksheet', assignment.link || '')
+    form.append('assignment_name', assignment.title || '')
+    form.append('subject', assignment.subject || '')
+
+    const { data, error: fnErr } = await supabase.functions.invoke('submit-worksheet', { body: form })
+
+    if (!fnErr && data?.ok !== false) {
+      const submitted_at = new Date().toISOString()
+      setAssignmentSubmissions((prev) => [
+        ...prev,
+        { assignment_id: assignment.id, student_id: student.student_id, student_name: student.student_name, file_name: file.name, submitted_at },
+      ])
+      setWorksheetReport((prev) => prev.map((a) => (a.id === assignment.id
+        ? {
+            ...a,
+            submitted_count: a.submitted_count + 1,
+            missing_count: Math.max(a.missing_count - 1, 0),
+            submitted_pct: a.total_students ? Math.round((1000 * (a.submitted_count + 1)) / a.total_students) / 10 : 0,
+          }
+        : a
+      )))
+      setUploadingForKey(null)
+      return
+    }
+
+    let message = data?.error
+    if (!message && fnErr?.context?.json) {
+      try { message = (await fnErr.context.json())?.error } catch { /* not JSON */ }
+    }
+    setUploadErrorByKey((prev) => ({ ...prev, [key]: message || fnErr?.message || 'Upload failed. Please try again.' }))
+    setUploadingForKey(null)
+  }
+
   async function deleteAssignment(id) {
     setConfirmDeleteAssignment(null)
     setDeletingAssignmentId(id)
@@ -940,6 +1015,38 @@ export default function TeacherDashboard() {
       setEditingPhoneValue('')
     }
     setSavingPhone(false)
+  }
+
+  // student_name is denormalized into student_scores, assignment_submissions
+  // and worksheet_feedback too (so historical rows keep reading correctly
+  // without a join back to the roster), and worksheet_feedback has no
+  // client-writable UPDATE policy at all — so the rename goes through the
+  // rename-student Edge Function (service role) rather than a direct
+  // .update() here, to actually reach every table in one shot.
+  async function updateStudentName(student) {
+    const newName = editingNameValue.trim()
+    if (!newName || newName === student.student_name) { setEditingNameStudentId(null); return }
+    setSavingName(true)
+    const { data, error: fnErr } = await supabase.functions.invoke('rename-student', {
+      body: { student_id: student.student_id, new_name: newName },
+    })
+    let message = data?.error
+    if (!message && fnErr?.context?.json) {
+      try { message = (await fnErr.context.json())?.error } catch { /* not JSON */ }
+    }
+    if (fnErr || data?.ok === false) {
+      alert(`Failed to rename student: ${message || fnErr?.message || 'Unknown error'}`)
+    } else {
+      const oldName = student.student_name
+      setStudents((prev) => prev.map((s) => (s.student_id === student.student_id ? { ...s, student_name: newName } : s)))
+      setAllScores((prev) => prev.map((s) => (s.student_id === student.student_id ? { ...s, student_name: newName } : s)))
+      setAssignmentSubmissions((prev) => prev.map((s) => (s.student_id === student.student_id ? { ...s, student_name: newName } : s)))
+      setWorksheetFeedback((prev) => prev.map((s) => (s.student_id === student.student_id ? { ...s, student_name: newName } : s)))
+      setEditingNameStudentId(null)
+      setEditingNameValue('')
+      notifyStudentRenameWebhook(oldName, newName, { phone: student.phone, studentClass: student.class })
+    }
+    setSavingName(false)
   }
 
   async function removeEmail(emailRow) {
@@ -1995,15 +2102,40 @@ function ini(name) {
                                       </button>
                                     </div>
                                     <div className="flex flex-wrap gap-1.5">
-                                      {p.missing.map((s) => (
-                                        <span
-                                          key={s.student_id}
-                                          className="text-xs px-2 py-0.5 rounded-full"
-                                          style={{ background: 'rgba(239,68,68,0.12)', color: '#dc2626', border: '1px solid rgba(239,68,68,0.25)' }}
-                                        >
-                                          {s.student_name}
-                                        </span>
-                                      ))}
+                                      {p.missing.map((s) => {
+                                        const uploadKey = `${a.id}:${s.student_id}`
+                                        const isUploading = uploadingForKey === uploadKey
+                                        const uploadError = uploadErrorByKey[uploadKey]
+                                        return (
+                                          <div key={s.student_id} className="flex flex-col items-start gap-0.5">
+                                            <span
+                                              className="inline-flex items-center gap-1.5 text-xs pl-2 pr-1.5 py-0.5 rounded-full"
+                                              style={{ background: 'rgba(239,68,68,0.12)', color: '#dc2626', border: '1px solid rgba(239,68,68,0.25)' }}
+                                            >
+                                              {s.student_name}
+                                              <label
+                                                className="cursor-pointer font-semibold leading-none"
+                                                style={{ color: isUploading ? '#dc2626' : GOLD, opacity: isUploading ? 0.6 : 1 }}
+                                                title="Upload this student's worksheet PDF on their behalf"
+                                              >
+                                                {isUploading ? '⏳' : '📎'}
+                                                <input
+                                                  type="file"
+                                                  accept="application/pdf"
+                                                  className="hidden"
+                                                  disabled={isUploading}
+                                                  onChange={(e) => {
+                                                    const file = e.target.files?.[0]
+                                                    e.target.value = ''
+                                                    if (file) uploadWorksheetForStudent(a, s, file)
+                                                  }}
+                                                />
+                                              </label>
+                                            </span>
+                                            {uploadError && <span className="text-[10px] text-red-500 max-w-[10rem]">{uploadError}</span>}
+                                          </div>
+                                        )
+                                      })}
                                     </div>
                                   </div>
                                 )}
@@ -2132,6 +2264,53 @@ function ini(name) {
 
                         {isExpanded && (
                           <div className="px-5 pb-4 pt-2 border-t border-amber-100" style={{ background: 'rgba(200,134,10,0.06)' }}>
+                            <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-2">Student Name</p>
+                            <div className="bg-white rounded-lg px-3 py-2 border border-gray-100 flex items-center justify-between gap-2 mb-3">
+                              {editingNameStudentId === s.student_id ? (
+                                <>
+                                  <input
+                                    type="text"
+                                    autoFocus
+                                    placeholder="Student name"
+                                    value={editingNameValue}
+                                    onChange={(e) => setEditingNameValue(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') updateStudentName(s)
+                                      if (e.key === 'Escape') { setEditingNameStudentId(null); setEditingNameValue('') }
+                                    }}
+                                    className="flex-1 border border-gray-200 rounded-lg px-2 py-1 text-sm focus:outline-none bg-white"
+                                    onFocus={(e) => e.target.style.boxShadow = `0 0 0 2px ${GOLD}40`}
+                                    onBlur={(e) => e.target.style.boxShadow = ''}
+                                  />
+                                  <button
+                                    onClick={() => updateStudentName(s)}
+                                    disabled={savingName}
+                                    className="text-xs font-semibold flex-shrink-0 disabled:opacity-50"
+                                    style={{ color: GOLD }}
+                                  >
+                                    {savingName ? '…' : 'Save'}
+                                  </button>
+                                  <button
+                                    onClick={() => { setEditingNameStudentId(null); setEditingNameValue('') }}
+                                    className="text-xs text-gray-400 hover:text-gray-600 font-semibold flex-shrink-0"
+                                  >
+                                    Cancel
+                                  </button>
+                                </>
+                              ) : (
+                                <>
+                                  <span className="text-sm text-gray-700 flex-1">{s.student_name}</span>
+                                  <button
+                                    onClick={() => { setEditingNameStudentId(s.student_id); setEditingNameValue(s.student_name) }}
+                                    className="text-xs font-semibold hover:underline flex-shrink-0"
+                                    style={{ color: GOLD }}
+                                  >
+                                    Edit
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                            <p className="text-[10px] text-gray-400 -mt-2 mb-3">Renaming updates every test score, worksheet submission and feedback record for this student, and syncs the change to the worksheet system.</p>
                             <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-2">Phone Number</p>
                             <div className="bg-white rounded-lg px-3 py-2 border border-gray-100 flex items-center justify-between gap-2 mb-3">
                               {editingPhoneStudentId === s.student_id ? (

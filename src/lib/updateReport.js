@@ -38,6 +38,22 @@ export function computeExamDate(csvRows) {
   return best ?? csvRows[0]?.submittedOn ?? ''
 }
 
+// Learnyst's "Submitted On" is whatever free-form date string their export
+// uses, not necessarily YYYY-MM-DD — this turns it into a value an
+// `<input type="date">` can actually display, so the exam date field can be
+// pre-filled as soon as a CSV loads instead of only appearing (read-only) at
+// Preview time. Falls back to '' (leaving the field for the teacher to fill
+// in by hand) if the string doesn't parse.
+export function parseCsvDateToInputValue(raw) {
+  if (!raw) return ''
+  const d = new Date(raw)
+  if (Number.isNaN(d.getTime())) return ''
+  const yyyy = d.getFullYear()
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${yyyy}-${mm}-${dd}`
+}
+
 // Total Marks is an optional override — if the teacher leaves it blank, fall
 // back to whatever Learnyst's own "Total Score" column says (the value most
 // rows agree on, same mode-picking approach as computeExamDate, in case a

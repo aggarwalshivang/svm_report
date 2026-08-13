@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { REPORT_TOPICS, MIN_PERCENTAGE_OPTIONS } from '../../constants/reportTopics'
-import { parseScoreCsv, computeExamDate, computeTotalMarksFromCsv, matchAndBuildRows } from '../../lib/updateReport'
+import { parseScoreCsv, computeExamDate, parseCsvDateToInputValue, computeTotalMarksFromCsv, matchAndBuildRows } from '../../lib/updateReport'
 import { downloadTextFile, checkDuplicateTest, buildAndDownloadReportCsvs, insertScoreRows, sendReportEmail } from '../../lib/reportSubmit'
 import { GOLD, NAV, inputClass, focusGold, blurGold } from './formStyles'
 import RecipientField from './RecipientField'
@@ -24,6 +24,7 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
   const [subject, setSubject] = useState('Science')
   const [topic, setTopic] = useState('')
   const [file, setFile] = useState(null)
+  const [examDate, setExamDate] = useState('')
   const [totalMarks, setTotalMarks] = useState('')
   const [minPercentage, setMinPercentage] = useState('40')
   const [recipient, setRecipient] = useState(DEFAULT_RECIPIENT)
@@ -68,6 +69,10 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
     setCsvRows(rows)
     setDeviceRows([])
     setDeviceAssignments({})
+    // Pre-fill from whatever Learnyst stamped on the submissions, same value
+    // Preview would've computed anyway — the teacher can still edit it
+    // before submitting if it's wrong or didn't parse.
+    setExamDate(parseCsvDateToInputValue(computeExamDate(rows)))
     const knownEmails = new Set(sharedDeviceEmails.map((d) => d.email.toLowerCase()))
     const flagged = rows
       .map((r, rowIndex) => ({ ...r, rowIndex }))
@@ -86,6 +91,7 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
     setCsvRows([])
     setDeviceRows([])
     setDeviceAssignments({})
+    setExamDate('')
     if (!f) return
 
     try {
@@ -129,6 +135,7 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
     setError('')
     if (!file) { setError('Choose a CSV file to upload.'); return }
     if (!topic) { setError('Choose a topic.'); return }
+    if (!examDate) { setError('Choose an exam date.'); return }
     if (!recipient.trim()) { setError('Enter a recipient email.'); return }
     if (!csvRows.length) { setError('That CSV has no usable rows.'); return }
 
@@ -156,7 +163,6 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
       }
       const totalMarksFromCsv = !totalMarks || Number(totalMarks) <= 0
 
-      const examDate = computeExamDate(resolvedCsvRows)
       const { rows, unmatchedCsvNames } = matchAndBuildRows({
         roster: studentList, csvRows: resolvedCsvRows, classNum, subject, topicName: topic,
         totalMarks: effectiveTotalMarks, examDate, excludeRowIndexes,
@@ -209,6 +215,7 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
     setStage('form')
     setPreview(null)
     setFile(null)
+    setExamDate('')
     setCsvRows([])
     setDeviceRows([])
     setDeviceAssignments({})
@@ -323,16 +330,25 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
 
             <div className="grid grid-cols-2 gap-3">
               <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-1.5">Exam Date</p>
+                <input type="date" value={examDate} onChange={(e) => setExamDate(e.target.value)}
+                  className={inputClass} onFocus={focusGold} onBlur={blurGold} />
+                <p className="text-[11px] text-gray-400 mt-1">
+                  {file ? 'Auto-filled from the CSV — change it if it looks wrong.' : 'Loads automatically once a CSV is chosen.'}
+                </p>
+              </div>
+              <div>
                 <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-1.5">Total Marks (optional)</p>
                 <input type="number" min="1" placeholder="From CSV" value={totalMarks} onChange={(e) => setTotalMarks(e.target.value)}
                   className={inputClass} onFocus={focusGold} onBlur={blurGold} />
               </div>
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-1.5">Min Percentage</p>
-                <select value={minPercentage} onChange={(e) => setMinPercentage(e.target.value)} className={inputClass} onFocus={focusGold} onBlur={blurGold}>
-                  {MIN_PERCENTAGE_OPTIONS.map((p) => <option key={p} value={p}>{p}%</option>)}
-                </select>
-              </div>
+            </div>
+
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-1.5">Min Percentage</p>
+              <select value={minPercentage} onChange={(e) => setMinPercentage(e.target.value)} className={inputClass} onFocus={focusGold} onBlur={blurGold}>
+                {MIN_PERCENTAGE_OPTIONS.map((p) => <option key={p} value={p}>{p}%</option>)}
+              </select>
             </div>
 
             <RecipientField recipient={recipient} onChange={setRecipient} teacherEmail={teacherEmail} />
