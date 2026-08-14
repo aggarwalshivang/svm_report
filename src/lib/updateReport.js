@@ -115,7 +115,8 @@ export function matchAndBuildRows({ roster, csvRows, classNum, subject, topicNam
       const scoreObtained = Number.isFinite(obtained) && Number.isFinite(originalTotal) && originalTotal > 0
         ? Math.round((obtained / originalTotal) * Number(totalMarks))
         : 0
-      return { ...base, date: csvRow.submittedOn || examDate, score_obtained: scoreObtained, is_absent: false }
+      const rowDate = parseCsvDateToInputValue(csvRow.submittedOn) || examDate
+      return { ...base, date: rowDate, score_obtained: scoreObtained, is_absent: false }
     }
     return { ...base, date: examDate, score_obtained: 0, is_absent: true }
   })
