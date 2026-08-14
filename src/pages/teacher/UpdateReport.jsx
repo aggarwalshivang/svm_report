@@ -424,7 +424,7 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
                 <p className="font-semibold">
                   {preview.duplicateCount} existing record(s) already match Class {classNum} · {subject} · {topic} · {preview.examDate}.
                 </p>
-                <p className="text-xs mt-0.5">Confirming will add these {preview.rows.length} rows on top of the existing ones — it will not replace them.</p>
+                <p className="text-xs mt-0.5">Confirming will overwrite those existing records with these {preview.rows.length} rows' scores, not duplicate them.</p>
               </div>
             )}
 

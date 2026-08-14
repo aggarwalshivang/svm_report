@@ -52,8 +52,15 @@ export function buildAndDownloadReportCsvs({ rows, subject, studentList, topic, 
   return { scoreCsv, attendanceCsv, fileTag }
 }
 
+// Upserts on (student_id, class, subject, topic_name, date) — see
+// scripts/add-unique-key-to-student-scores.sql — so re-confirming the same
+// test (a retry, or pushing through the duplicate-test warning) updates the
+// existing row instead of piling on another copy.
 export async function insertScoreRows(rows) {
-  const { data, error } = await supabase.from('student_scores').insert(rows).select()
+  const { data, error } = await supabase
+    .from('student_scores')
+    .upsert(rows, { onConflict: 'student_id,class,subject,topic_name,date' })
+    .select()
   if (error) throw error
   return data
 }
