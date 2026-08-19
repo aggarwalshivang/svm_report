@@ -1066,8 +1066,8 @@ function AssignmentCard({ a, session, onSubmitted }) {
     const f = e.target.files?.[0] || null
     setError('')
     if (!f) { setFile(null); return }
-    if (f.type !== 'application/pdf') { setError('Only PDF files are accepted.'); setFile(null); return }
-    if (f.size > MAX_FILE_BYTES) { setError('File must be under 20 MB.'); setFile(null); return }
+    if (f.type !== 'application/pdf') { setError('Only PDF files are accepted. Please convert your file to PDF and try again.'); setFile(null); return }
+    if (f.size > MAX_FILE_BYTES) { setError('This file is too large. Please upload a file smaller than 20 MB.'); setFile(null); return }
     setFile(f)
   }
 
@@ -1118,8 +1118,12 @@ function AssignmentCard({ a, session, onSubmitted }) {
       setRetryAttempt(0)
       setError(
         isNetworkFailure
-          ? 'Connection issue while uploading, even after retrying. Please check your internet connection and try again.'
-          : (message || fnErr?.message || 'Upload failed. Please try again.')
+          ? 'We could not upload your file due to a connection issue, even after retrying. Please check your internet connection and try again.'
+          // The edge function always returns a simple, student-friendly message
+          // (see submit-worksheet/index.ts) — fnErr.message is only ever shown
+          // here if the function crashed before it could respond at all, so
+          // this stays generic rather than surfacing raw technical text.
+          : (message || 'Something went wrong while submitting. Please try again, and let your teacher know if it keeps happening.')
       )
       return
     }

@@ -80,15 +80,15 @@ Deno.serve(async (req) => {
   try {
     // Only a logged-in (student or teacher) session may submit.
     const token = (req.headers.get('Authorization') ?? '').replace('Bearer ', '')
-    if (!token) throw new Error('Missing Authorization header')
+    if (!token) throw new Error('Your session has expired. Please log out and log in again, then submit your worksheet.')
     const { data: caller, error: callerErr } = await admin.auth.getUser(token)
-    if (callerErr || !caller?.user) throw new Error('Not authenticated')
+    if (callerErr || !caller?.user) throw new Error('Your session has expired. Please log out and log in again, then submit your worksheet.')
 
     const form = await req.formData()
     const file = form.get('file')
-    if (!(file instanceof File)) throw new Error('A worksheet PDF file is required')
-    if (file.type !== 'application/pdf') throw new Error('Only PDF files are accepted')
-    if (file.size > MAX_FILE_BYTES) throw new Error('File must be under 20 MB')
+    if (!(file instanceof File)) throw new Error('Please choose a PDF file before submitting.')
+    if (file.type !== 'application/pdf') throw new Error('Only PDF files are accepted. Please convert your file to PDF and try again.')
+    if (file.size > MAX_FILE_BYTES) throw new Error('This file is too large. Please upload a file smaller than 20 MB.')
 
     const assignmentId = String(form.get('assignment_id') ?? '')
     const studentId = Number(form.get('student_id'))
@@ -100,7 +100,7 @@ Deno.serve(async (req) => {
     const assignmentName = String(form.get('assignment_name') ?? '').trim() || portion
     const subject = String(form.get('subject') ?? '').trim() || 'General'
     if (!assignmentId || !studentId || !studentName || !className) {
-      throw new Error('assignment_id, student_id, student_name and class are required')
+      throw new Error('Something went wrong loading your details. Please refresh the page and try again.')
     }
 
     // Same field name the n8n-hosted form itself submits, so the workflow
@@ -126,7 +126,7 @@ Deno.serve(async (req) => {
       })
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
-        throw new Error('Grading is taking longer than expected. Please try submitting again in a minute.')
+        throw new Error('This is taking longer than usual. Please wait a minute, then try submitting again.')
       }
       throw err
     } finally {
@@ -134,14 +134,15 @@ Deno.serve(async (req) => {
     }
     if (!n8nResp.ok) {
       const body = await n8nResp.text().catch(() => '')
-      throw new Error(`n8n webhook rejected the upload (${n8nResp.status}): ${body.slice(0, 300)}`)
+      console.error(`n8n webhook rejected the upload (${n8nResp.status}): ${body.slice(0, 300)}`)
+      throw new Error('We could not process your file right now. Please try again in a few minutes.')
     }
 
     const n8nBody = await n8nResp.json().catch(() => null)
     const feedbackText = extractFeedbackText(n8nBody)
 
     if (feedbackText && feedbackText.trim().toLowerCase() === 'no feedback') {
-      return fail('Your handwriting could not be read from the scan. Please submit again with a clearer photo/scan.')
+      return fail('We could not read your handwriting clearly from this scan. Please retake a clear, well-lit photo (or a straight scan) and submit again.')
     }
 
     const { error: upsertErr } = await admin
@@ -156,7 +157,10 @@ Deno.serve(async (req) => {
         },
         { onConflict: 'assignment_id,student_id' }
       )
-    if (upsertErr) throw upsertErr
+    if (upsertErr) {
+      console.error('assignment_submissions upsert failed:', upsertErr)
+      throw new Error('We could not save your submission. Please try again in a moment. If this keeps happening, let your teacher know.')
+    }
 
     if (feedbackText) {
       const { handwriting, rest } = splitFeedback(feedbackText)
@@ -177,13 +181,17 @@ Deno.serve(async (req) => {
           },
           { onConflict: 'assignment_id,student_id' }
         )
-      if (feedbackErr) throw feedbackErr
+      if (feedbackErr) {
+        console.error('worksheet_feedback upsert failed:', feedbackErr)
+        throw new Error('We could not save your submission. Please try again in a moment. If this keeps happening, let your teacher know.')
+      }
     }
 
     return new Response(JSON.stringify({ ok: true }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     })
   } catch (err) {
-    return fail(err.message)
+    console.error('submit-worksheet failed:', err)
+    return fail(err.message || 'Something went wrong while submitting. Please try again.')
   }
 })
