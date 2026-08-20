@@ -5,6 +5,7 @@ import {
   BarChart, Bar, ResponsiveContainer, ComposedChart, Cell,
 } from 'recharts'
 import { supabase } from '../lib/supabase'
+import { normalizeTopicName } from '../lib/topicName'
 import { ThemeToggle } from '../lib/theme.jsx'
 import {
   computeSubmissionPerformance, aggregateChapterStats, aggregateSubjectStats,
@@ -293,28 +294,37 @@ export default function StudentDashboard() {
   const appeared = useMemo(() => scores.filter((s) => !s.is_absent), [scores])
   const absentCount = scores.filter((s) => s.is_absent).length
 
-  const avgPct = appeared.length > 0
-    ? (appeared.reduce((sum, s) => sum + (s.score_obtained / s.total_marks) * 100, 0) / appeared.length).toFixed(1)
-    : 0
+  // Weighted by marks (sum scored / sum possible), not a plain mean of each
+  // test's percentage — otherwise a 10-mark test swings the average as much
+  // as a 100-mark test.
+  const weightedAvg = (rows) => {
+    const totalMarks = rows.reduce((sum, s) => sum + s.total_marks, 0)
+    if (!totalMarks) return 0
+    return ((rows.reduce((sum, s) => sum + s.score_obtained, 0) / totalMarks) * 100).toFixed(1)
+  }
+
+  const avgPct = weightedAvg(appeared)
 
   const sciScores  = appeared.filter((s) => s.subject === 'Science')
   const mathScores = appeared.filter((s) => s.subject === 'Maths')
-  const sciAvg  = sciScores.length  ? (sciScores.reduce((a, s)  => a + (s.score_obtained / s.total_marks) * 100, 0) / sciScores.length).toFixed(1)  : 0
-  const mathAvg = mathScores.length ? (mathScores.reduce((a, s) => a + (s.score_obtained / s.total_marks) * 100, 0) / mathScores.length).toFixed(1) : 0
+  const sciAvg  = weightedAvg(sciScores)
+  const mathAvg = weightedAvg(mathScores)
   const bestSubject = Number(sciAvg) >= Number(mathAvg) ? 'Science' : 'Maths'
 
   // Topic analysis
   const topicStats = useMemo(() => {
     const map = {}
     appeared.forEach((s) => {
-      if (!map[s.topic_name]) map[s.topic_name] = { topic: s.topic_name, subject: s.subject, total: 0, count: 0, best: 0, worst: 100 }
+      const key = normalizeTopicName(s.topic_name)
+      if (!map[key]) map[key] = { topic: key, subject: s.subject, scored: 0, marks: 0, count: 0, best: 0, worst: 100 }
       const pct = (s.score_obtained / s.total_marks) * 100
-      map[s.topic_name].total  += pct
-      map[s.topic_name].count  += 1
-      map[s.topic_name].best    = Math.max(map[s.topic_name].best, pct)
-      map[s.topic_name].worst   = Math.min(map[s.topic_name].worst, pct)
+      map[key].scored += s.score_obtained
+      map[key].marks  += s.total_marks
+      map[key].count  += 1
+      map[key].best    = Math.max(map[key].best, pct)
+      map[key].worst   = Math.min(map[key].worst, pct)
     })
-    return Object.values(map).map((t) => ({ ...t, avg: +(t.total / t.count).toFixed(1), best: +t.best.toFixed(1), worst: +t.worst.toFixed(1) }))
+    return Object.values(map).map((t) => ({ ...t, avg: +((t.scored / t.marks) * 100).toFixed(1), best: +t.best.toFixed(1), worst: +t.worst.toFixed(1) }))
   }, [appeared])
 
   const strongTopics   = useMemo(() => topicStats.filter((t) => t.avg >= 80).sort((a, b) => b.avg - a.avg), [topicStats])
@@ -1055,6 +1065,10 @@ function AssignmentCard({ a, session, onSubmitted }) {
   const [uploading, setUploading] = useState(false)
   const [retryAttempt, setRetryAttempt] = useState(0)
   const [error, setError] = useState('')
+  // Set when submit-worksheet hands grading off to the background instead
+  // of waiting on a slow n8n call (see FAST_PATH_MS there) — the file was
+  // received, it just isn't graded yet, so this isn't an error.
+  const [gradingPending, setGradingPending] = useState(false)
   // Not status.key !== 'completed' — that flag also flips true the moment a
   // submission/feedback row exists at all, which would make this permanently
   // false (and the "Resubmit" label below unreachable) after a student's
@@ -1065,6 +1079,7 @@ function AssignmentCard({ a, session, onSubmitted }) {
   function pickFile(e) {
     const f = e.target.files?.[0] || null
     setError('')
+    setGradingPending(false)
     if (!f) { setFile(null); return }
     if (f.type !== 'application/pdf') { setError('Only PDF files are accepted. Please convert your file to PDF and try again.'); setFile(null); return }
     if (f.size > MAX_FILE_BYTES) { setError('This file is too large. Please upload a file smaller than 20 MB.'); setFile(null); return }
@@ -1075,6 +1090,8 @@ function AssignmentCard({ a, session, onSubmitted }) {
     if (!file) return
     setUploading(true)
     setError('')
+    setGradingPending(false)
+    const startedAt = new Date().toISOString()
 
     for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt++) {
       setRetryAttempt(attempt)
@@ -1095,6 +1112,10 @@ function AssignmentCard({ a, session, onSubmitted }) {
         setUploading(false)
         setRetryAttempt(0)
         setFile(null)
+        // Grading is still running server-side (see FAST_PATH_MS in
+        // submit-worksheet) — the file was received, just not graded yet,
+        // so leave the note up instead of the normal silent success.
+        if (data?.pending) setGradingPending(true)
         onSubmitted()
         return
       }
@@ -1109,9 +1130,31 @@ function AssignmentCard({ a, session, onSubmitted }) {
       }
       const isNetworkFailure = !message && fnErr?.message?.includes('Failed to send a request')
 
-      if (isNetworkFailure && attempt < MAX_UPLOAD_ATTEMPTS) {
-        await new Promise((r) => setTimeout(r, attempt * 1500))
-        continue
+      if (isNetworkFailure) {
+        // "Failed to send a request" only means the browser never got a
+        // response back — after a slow n8n grading call on a flaky mobile
+        // connection, the upload can easily have gone through and been
+        // recorded server-side even though this fetch() looks failed here.
+        // Check before assuming it failed, otherwise a real submission
+        // looks like an error and the student re-uploads (re-triggering AI
+        // grading) for nothing.
+        const { data: existing } = await supabase
+          .from('assignment_submissions')
+          .select('submitted_at')
+          .eq('assignment_id', a.id)
+          .eq('student_id', session.studentId)
+          .maybeSingle()
+        if (existing?.submitted_at && existing.submitted_at >= startedAt) {
+          setUploading(false)
+          setRetryAttempt(0)
+          setFile(null)
+          onSubmitted()
+          return
+        }
+        if (attempt < MAX_UPLOAD_ATTEMPTS) {
+          await new Promise((r) => setTimeout(r, attempt * 1500))
+          continue
+        }
       }
 
       setUploading(false)
@@ -1205,6 +1248,11 @@ function AssignmentCard({ a, session, onSubmitted }) {
         </p>
       )}
       {error && <p className="text-xs text-red-500">{error}</p>}
+      {gradingPending && (
+        <p className="text-xs font-medium" style={{ color: GOLD }}>
+          ⏳ Received! Grading is taking longer than usual — refresh in a minute to see your feedback.
+        </p>
+      )}
     </div>
   )
 }

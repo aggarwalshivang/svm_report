@@ -43,8 +43,12 @@ begin
     where se.class = my_class
   ),
   averages as (
+    -- Weighted by marks (sum scored / sum possible), not a plain mean of
+    -- each test's percentage — otherwise a 10-mark test swings the average
+    -- as much as a 100-mark test. Must match the weighted formula used by
+    -- StudentDashboard.jsx/TeacherDashboard.jsx's avgPct.
     select c.student_id,
-           coalesce(avg((s.score_obtained::numeric / nullif(s.total_marks, 0)) * 100), 0) as avg_pct
+           coalesce((sum(s.score_obtained)::numeric / nullif(sum(s.total_marks), 0)) * 100, 0) as avg_pct
     from classmates c
     left join public.student_scores s
       on s.student_id = c.student_id

@@ -24,15 +24,41 @@
 // "Workflow was started"), the submission is still recorded — grading
 // presumably happens later — it just doesn't have feedback yet.
 //
+// FAST_PATH_MS / background grading: n8n is usually done in a few seconds,
+// but its tail (busy AI queue, a big scan) can run well past a minute.
+// Holding the student's connection open that whole time is exactly what was
+// producing frequent "Failed to send a request" errors on real phones —
+// mobile networks kill long-idle connections independently of any timeout
+// we set, so the request can succeed server-side and still look failed to
+// the student. So: race the n8n call against a short window. If it settles
+// within that window (the common case), respond inline exactly as before.
+// If not, stop waiting on it — the connection closes now — and let grading
+// keep running in the background via EdgeRuntime.waitUntil, writing the
+// same rows once it finishes. The one behavior change: if a *slow* grading
+// call also comes back "no feedback" (unreadable scan), the student won't
+// see that rejection message live — the assignment just silently stays
+// un-submitted rather than flipping to Completed — since by then the
+// response has already gone out. That combination (slow AND unreadable) is
+// rare; a stuck-forever "connection issue" on every slow-but-fine scan,
+// which is what was actually happening "quite often", is not.
+//
 // Deploy:
 //   npx supabase functions deploy submit-worksheet --no-verify-jwt
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
+declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void } | undefined
+
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 const N8N_WEBHOOK_URL = 'https://n8n.saraswatividyamandir.com/webhook/student-form-worksheet'
 const MAX_FILE_BYTES = 20 * 1024 * 1024
+
+// How long we hold the student's connection open waiting for n8n before
+// switching to the background path.
+const FAST_PATH_MS = 15_000
+// Hard backstop for the n8n call itself, fast path or background.
+const N8N_TIMEOUT_MS = 170_000
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -66,6 +92,11 @@ function extractFeedbackText(n8nBody: unknown): string | null {
   }
   return text || null
 }
+
+type GradeResult =
+  | { status: 'ok' }
+  | { status: 'rejected'; message: string }
+  | { status: 'error'; message: string }
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
@@ -110,86 +141,102 @@ Deno.serve(async (req) => {
     forward.append('Homework File', file, file.name)
 
     const formQueryParameters = new URLSearchParams({ portion, class: className, folder, worksheet })
-    // n8n's grading step is usually fast, but an AI call that hangs would
-    // otherwise be killed by the platform's own execution limit before we
-    // get a chance to respond — the client then sees an opaque "Failed to
-    // send a request to the Edge Function" instead of a real error. Abort
-    // well before that limit so we can return a clear, retryable message.
-    const n8nController = new AbortController()
-    const n8nTimeout = setTimeout(() => n8nController.abort(), 60_000)
-    let n8nResp: Response
-    try {
-      n8nResp = await fetch(`${N8N_WEBHOOK_URL}?${formQueryParameters.toString()}`, {
-        method: 'POST',
-        body: forward,
-        signal: n8nController.signal,
-      })
-    } catch (err) {
-      if (err instanceof Error && err.name === 'AbortError') {
-        throw new Error('This is taking longer than usual. Please wait a minute, then try submitting again.')
+
+    async function gradeAndRecord(n8nResp: Response): Promise<GradeResult> {
+      if (!n8nResp.ok) {
+        const body = await n8nResp.text().catch(() => '')
+        console.error(`n8n webhook rejected the upload (${n8nResp.status}): ${body.slice(0, 300)}`)
+        return { status: 'error', message: 'We could not process your file right now. Please try again in a few minutes.' }
       }
-      throw err
-    } finally {
-      clearTimeout(n8nTimeout)
-    }
-    if (!n8nResp.ok) {
-      const body = await n8nResp.text().catch(() => '')
-      console.error(`n8n webhook rejected the upload (${n8nResp.status}): ${body.slice(0, 300)}`)
-      throw new Error('We could not process your file right now. Please try again in a few minutes.')
-    }
 
-    const n8nBody = await n8nResp.json().catch(() => null)
-    const feedbackText = extractFeedbackText(n8nBody)
+      const n8nBody = await n8nResp.json().catch(() => null)
+      const feedbackText = extractFeedbackText(n8nBody)
 
-    if (feedbackText && feedbackText.trim().toLowerCase() === 'no feedback') {
-      return fail('We could not read your handwriting clearly from this scan. Please retake a clear, well-lit photo (or a straight scan) and submit again.')
-    }
+      if (feedbackText && feedbackText.trim().toLowerCase() === 'no feedback') {
+        return { status: 'rejected', message: 'We could not read your handwriting clearly from this scan. Please retake a clear, well-lit photo (or a straight scan) and submit again.' }
+      }
 
-    const { error: upsertErr } = await admin
-      .from('assignment_submissions')
-      .upsert(
-        {
-          assignment_id: assignmentId,
-          student_id: studentId,
-          student_name: studentName,
-          file_name: file.name,
-          submitted_at: new Date().toISOString(),
-        },
-        { onConflict: 'assignment_id,student_id' }
-      )
-    if (upsertErr) {
-      console.error('assignment_submissions upsert failed:', upsertErr)
-      throw new Error('We could not save your submission. Please try again in a moment. If this keeps happening, let your teacher know.')
-    }
-
-    if (feedbackText) {
-      const { handwriting, rest } = splitFeedback(feedbackText)
-      const context = `[${assignmentName}, Class ${className}, ${subject}]`
-      const { error: feedbackErr } = await admin
-        .from('worksheet_feedback')
+      const { error: upsertErr } = await admin
+        .from('assignment_submissions')
         .upsert(
           {
             assignment_id: assignmentId,
             student_id: studentId,
             student_name: studentName,
-            class: Number(className),
-            subject,
-            assignment_name: assignmentName,
-            handwriting_feedback: handwriting ? `${context} ${handwriting}` : null,
-            assignment_feedback: rest ? `${context} ${rest}` : null,
+            file_name: file.name,
             submitted_at: new Date().toISOString(),
           },
           { onConflict: 'assignment_id,student_id' }
         )
-      if (feedbackErr) {
-        console.error('worksheet_feedback upsert failed:', feedbackErr)
-        throw new Error('We could not save your submission. Please try again in a moment. If this keeps happening, let your teacher know.')
+      if (upsertErr) {
+        console.error('assignment_submissions upsert failed:', upsertErr)
+        return { status: 'error', message: 'We could not save your submission. Please try again in a moment. If this keeps happening, let your teacher know.' }
       }
+
+      if (feedbackText) {
+        const { handwriting, rest } = splitFeedback(feedbackText)
+        const context = `[${assignmentName}, Class ${className}, ${subject}]`
+        const { error: feedbackErr } = await admin
+          .from('worksheet_feedback')
+          .upsert(
+            {
+              assignment_id: assignmentId,
+              student_id: studentId,
+              student_name: studentName,
+              class: Number(className),
+              subject,
+              assignment_name: assignmentName,
+              handwriting_feedback: handwriting ? `${context} ${handwriting}` : null,
+              assignment_feedback: rest ? `${context} ${rest}` : null,
+              submitted_at: new Date().toISOString(),
+            },
+            { onConflict: 'assignment_id,student_id' }
+          )
+        if (feedbackErr) {
+          console.error('worksheet_feedback upsert failed:', feedbackErr)
+          return { status: 'error', message: 'We could not save your submission. Please try again in a moment. If this keeps happening, let your teacher know.' }
+        }
+      }
+
+      return { status: 'ok' }
     }
 
-    return new Response(JSON.stringify({ ok: true }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    const n8nController = new AbortController()
+    const n8nTimeout = setTimeout(() => n8nController.abort(), N8N_TIMEOUT_MS)
+    const n8nPromise = fetch(`${N8N_WEBHOOK_URL}?${formQueryParameters.toString()}`, {
+      method: 'POST',
+      body: forward,
+      signal: n8nController.signal,
+    }).finally(() => clearTimeout(n8nTimeout))
+
+    const gradePromise: Promise<GradeResult> = n8nPromise.then(gradeAndRecord).catch((err) => {
+      const message = err instanceof Error && err.name === 'AbortError'
+        ? 'This is taking longer than usual. Please wait a minute, then try submitting again.'
+        : (err?.message || 'Something went wrong while submitting. Please try again.')
+      console.error('n8n grading call failed:', err)
+      return { status: 'error', message } as GradeResult
     })
+
+    // Keep grading running even after we respond, if it comes to that.
+    if (typeof EdgeRuntime !== 'undefined') EdgeRuntime.waitUntil(gradePromise)
+
+    const race = await Promise.race([
+      gradePromise.then((result) => ({ timedOut: false as const, result })),
+      new Promise<{ timedOut: true }>((resolve) => setTimeout(() => resolve({ timedOut: true }), FAST_PATH_MS)),
+    ])
+
+    if (race.timedOut) {
+      return new Response(JSON.stringify({ ok: true, pending: true }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+
+    if (race.result.status === 'ok') {
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+    return fail(race.result.message)
   } catch (err) {
     console.error('submit-worksheet failed:', err)
     return fail(err.message || 'Something went wrong while submitting. Please try again.')

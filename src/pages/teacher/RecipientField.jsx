@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { GOLD, inputClass, focusGold, blurGold } from './formStyles'
+import { useOtpExpiry, formatOtpCountdown } from '../../lib/useOtpExpiry'
 
 // Same send-action-otp/verify-action-otp pair TeacherDashboard already uses
 // to gate delete-student/delete-test/reopen-submissions — 'change-report-recipient'
@@ -22,6 +23,7 @@ export default function RecipientField({ recipient, onChange, teacherEmail }) {
   const [otpError, setOtpError] = useState('')
   const [otpCooldown, setOtpCooldown] = useState(0)
   const cooldownRef = useRef(null)
+  const { expiresIn, startExpiry } = useOtpExpiry()
   useEffect(() => () => clearInterval(cooldownRef.current), [])
 
   function startOtpCooldown() {
@@ -68,7 +70,9 @@ export default function RecipientField({ recipient, onChange, teacherEmail }) {
       setOtpError(data?.error || fnErr?.message || 'Failed to send code.')
       return
     }
+    setOtpCode('')
     startOtpCooldown()
+    startExpiry()
     setOtpStep('sent')
   }
 
@@ -139,9 +143,12 @@ export default function RecipientField({ recipient, onChange, teacherEmail }) {
                 placeholder="123456"
                 className={`${inputClass} tracking-[0.3em] text-center`} onFocus={focusGold} onBlur={blurGold}
               />
+              <p className="text-[11px]" style={{ color: expiresIn > 0 ? undefined : '#dc2626' }}>
+                {expiresIn > 0 ? `Code expires in ${formatOtpCountdown(expiresIn)}` : 'Code expired — resend a new one'}
+              </p>
               {otpError && <p className="text-xs text-red-500">{otpError}</p>}
               <div className="flex flex-wrap items-center gap-3">
-                <button type="button" onClick={verifyRecipientOtp} disabled={otpCode.length !== 6 || otpVerifying}
+                <button type="button" onClick={verifyRecipientOtp} disabled={otpCode.length !== 6 || otpVerifying || expiresIn === 0}
                   className="text-xs font-semibold px-3 py-1.5 rounded-lg text-white transition disabled:opacity-50"
                   style={{ background: GOLD }}
                 >

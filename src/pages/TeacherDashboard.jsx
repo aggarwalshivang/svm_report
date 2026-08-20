@@ -5,6 +5,8 @@ import {
   ReferenceLine, ResponsiveContainer, LineChart, Line, Cell, Legend,
 } from 'recharts'
 import { supabase } from '../lib/supabase'
+import { normalizeTopicName } from '../lib/topicName'
+import { useOtpExpiry, formatOtpCountdown } from '../lib/useOtpExpiry'
 import { ThemeToggle } from '../lib/theme.jsx'
 import {
   computeSubmissionPerformance, aggregateChapterStats, aggregateSubjectStats,
@@ -289,20 +291,28 @@ export default function TeacherDashboard() {
       const rows = allScores.filter((r) => r.student_id === s.student_id && countsForStudent(r, s))
       const appeared = rows.filter((r) => !r.is_absent)
       const absentCount = rows.filter((r) => r.is_absent).length
-      const avgPct = appeared.length > 0
-        ? (appeared.reduce((sum, r) => sum + (r.score_obtained / r.total_marks) * 100, 0) / appeared.length).toFixed(1)
-        : null
+      // Weighted by marks (sum scored / sum possible), not a plain mean of
+      // each test's percentage — otherwise a 10-mark test swings the average
+      // as much as a 100-mark test.
+      const weightedAvg = (arr) => {
+        const marks = arr.reduce((sum, r) => sum + r.total_marks, 0)
+        return marks > 0 ? (arr.reduce((sum, r) => sum + r.score_obtained, 0) / marks) * 100 : null
+      }
+      const avgPctNum = weightedAvg(appeared)
+      const avgPct = avgPctNum !== null ? avgPctNum.toFixed(1) : null
       const sciRows  = appeared.filter((r) => r.subject === 'Science')
       const mathRows = appeared.filter((r) => r.subject === 'Maths')
-      const sciAvg  = sciRows.length  ? (sciRows.reduce((a, r)  => a + (r.score_obtained / r.total_marks) * 100, 0) / sciRows.length).toFixed(1)  : null
-      const mathAvg = mathRows.length ? (mathRows.reduce((a, r) => a + (r.score_obtained / r.total_marks) * 100, 0) / mathRows.length).toFixed(1) : null
+      const sciAvgNum  = weightedAvg(sciRows)
+      const mathAvgNum = weightedAvg(mathRows)
+      const sciAvg  = sciAvgNum  !== null ? sciAvgNum.toFixed(1)  : null
+      const mathAvg = mathAvgNum !== null ? mathAvgNum.toFixed(1) : null
       const totalScored = appeared.reduce((sum, r) => sum + r.score_obtained, 0)
       const totalMarks  = appeared.reduce((sum, r) => sum + r.total_marks, 0)
       const totalLost   = totalMarks - totalScored
       const positivePct = totalMarks > 0 ? +((totalScored / totalMarks) * 100).toFixed(1) : null
       const negativePct = totalMarks > 0 ? +((totalLost   / totalMarks) * 100).toFixed(1) : null
       const sorted = [...appeared].sort((a, b) => a.date.localeCompare(b.date))
-      const avg3 = (arr) => arr.reduce((s, r) => s + (r.score_obtained / r.total_marks) * 100, 0) / arr.length
+      const avg3 = (arr) => weightedAvg(arr) ?? 0
       let trend = null
       if (sorted.length >= 6) {
         const delta = avg3(sorted.slice(-3)) - avg3(sorted.slice(0, 3))
@@ -353,17 +363,18 @@ export default function TeacherDashboard() {
       const student = scopeById.get(r.student_id)
       if (!student || r.is_absent || !countsForStudent(r, student)) return
       const key = `${r.subject}||${r.topic_name}`
-      if (!map[key]) map[key] = { subject: r.subject, topic: r.topic_name, total: 0, count: 0, tests: new Set(), best: 0, worst: 100 }
+      if (!map[key]) map[key] = { subject: r.subject, topic: r.topic_name, scored: 0, marks: 0, count: 0, tests: new Set(), best: 0, worst: 100 }
       const pct = (r.score_obtained / r.total_marks) * 100
-      map[key].total += pct
-      map[key].count += 1
+      map[key].scored += r.score_obtained
+      map[key].marks  += r.total_marks
+      map[key].count  += 1
       map[key].tests.add(`${r.date}|${r.topic_name}|${r.total_marks}`)
       map[key].best  = Math.max(map[key].best, pct)
       map[key].worst = Math.min(map[key].worst, pct)
     })
     return Object.values(map).map((t) => ({
       ...t,
-      avg:   +( t.total / t.count).toFixed(1),
+      avg:   +((t.scored / t.marks) * 100).toFixed(1),
       best:  +t.best.toFixed(1),
       worst: +t.worst.toFixed(1),
       testCount: t.tests.size,
@@ -2916,6 +2927,7 @@ function ConfirmDeleteStudentModal({ student, teacherEmail, onCancel, onConfirm 
   const [error, setError] = useState('')
   const [cooldown, setCooldown] = useState(0)
   const cooldownRef = useRef(null)
+  const { expiresIn, startExpiry } = useOtpExpiry()
   const matches = text.trim().toLowerCase() === PHRASE
 
   useEffect(() => () => clearInterval(cooldownRef.current), [])
@@ -2945,7 +2957,9 @@ function ConfirmDeleteStudentModal({ student, teacherEmail, onCancel, onConfirm 
       setError(data?.error || 'Could not send code. Please try again.')
       return
     }
+    setCode('')
     startCooldown()
+    startExpiry()
     setStep('otp')
   }
 
@@ -3022,8 +3036,11 @@ function ConfirmDeleteStudentModal({ student, teacherEmail, onCancel, onConfirm 
               onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
               onKeyDown={(e) => { if (e.key === 'Enter' && code.length === 6) verifyAndConfirm() }}
               placeholder="123456"
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-2 tracking-[0.3em] text-center focus:outline-none focus:ring-2 focus:ring-red-200"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-1 tracking-[0.3em] text-center focus:outline-none focus:ring-2 focus:ring-red-200"
             />
+            <p className="text-[11px] mb-2" style={{ color: expiresIn > 0 ? undefined : '#dc2626' }}>
+              {expiresIn > 0 ? `Code expires in ${formatOtpCountdown(expiresIn)}` : 'Code expired — resend a new one'}
+            </p>
             <button
               type="button"
               disabled={cooldown > 0 || sending}
@@ -3044,7 +3061,7 @@ function ConfirmDeleteStudentModal({ student, teacherEmail, onCancel, onConfirm 
               </button>
               <button
                 onClick={verifyAndConfirm}
-                disabled={code.length !== 6 || verifying}
+                disabled={code.length !== 6 || verifying || expiresIn === 0}
                 className="text-sm font-semibold px-4 py-2 rounded-lg text-white bg-red-500 hover:bg-red-600 transition disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 {verifying ? 'Verifying…' : 'Delete Student'}
@@ -3067,6 +3084,7 @@ function ConfirmRenameStudentModal({ student, newName, teacherEmail, onCancel, o
   const [error, setError] = useState('')
   const [cooldown, setCooldown] = useState(0)
   const cooldownRef = useRef(null)
+  const { expiresIn, startExpiry } = useOtpExpiry()
 
   useEffect(() => () => clearInterval(cooldownRef.current), [])
 
@@ -3095,7 +3113,9 @@ function ConfirmRenameStudentModal({ student, newName, teacherEmail, onCancel, o
       setError(data?.error || 'Could not send code. Please try again.')
       return
     }
+    setCode('')
     startCooldown()
+    startExpiry()
     setStep('otp')
   }
 
@@ -3162,9 +3182,12 @@ function ConfirmRenameStudentModal({ student, newName, teacherEmail, onCancel, o
               onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
               onKeyDown={(e) => { if (e.key === 'Enter' && code.length === 6) verifyAndConfirm() }}
               placeholder="123456"
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-2 tracking-[0.3em] text-center focus:outline-none focus:ring-2"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-1 tracking-[0.3em] text-center focus:outline-none focus:ring-2"
               style={{ '--tw-ring-color': `${GOLD}40` }}
             />
+            <p className="text-[11px] mb-2" style={{ color: expiresIn > 0 ? undefined : '#dc2626' }}>
+              {expiresIn > 0 ? `Code expires in ${formatOtpCountdown(expiresIn)}` : 'Code expired — resend a new one'}
+            </p>
             <button
               type="button"
               disabled={cooldown > 0 || sending}
@@ -3186,7 +3209,7 @@ function ConfirmRenameStudentModal({ student, newName, teacherEmail, onCancel, o
               </button>
               <button
                 onClick={verifyAndConfirm}
-                disabled={code.length !== 6 || verifying}
+                disabled={code.length !== 6 || verifying || expiresIn === 0}
                 className="text-sm font-semibold px-4 py-2 rounded-lg text-white transition disabled:opacity-40 disabled:cursor-not-allowed"
                 style={{ background: GOLD }}
               >
@@ -3250,6 +3273,7 @@ function ConfirmReopenSubmissionsModal({ assignment, teacherEmail, onCancel, onC
   const [error, setError] = useState('')
   const [cooldown, setCooldown] = useState(0)
   const cooldownRef = useRef(null)
+  const { expiresIn, startExpiry } = useOtpExpiry()
 
   useEffect(() => () => clearInterval(cooldownRef.current), [])
 
@@ -3275,7 +3299,9 @@ function ConfirmReopenSubmissionsModal({ assignment, teacherEmail, onCancel, onC
       setError(data?.error || 'Could not send code. Please try again.')
       return
     }
+    setCode('')
     startCooldown()
+    startExpiry()
     setStep('otp')
   }
 
@@ -3341,8 +3367,11 @@ function ConfirmReopenSubmissionsModal({ assignment, teacherEmail, onCancel, onC
               onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
               onKeyDown={(e) => { if (e.key === 'Enter' && code.length === 6) verifyAndConfirm() }}
               placeholder="123456"
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-2 tracking-[0.3em] text-center focus:outline-none focus:ring-2 focus:ring-orange-200"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-1 tracking-[0.3em] text-center focus:outline-none focus:ring-2 focus:ring-orange-200"
             />
+            <p className="text-[11px] mb-2" style={{ color: expiresIn > 0 ? undefined : '#dc2626' }}>
+              {expiresIn > 0 ? `Code expires in ${formatOtpCountdown(expiresIn)}` : 'Code expired — resend a new one'}
+            </p>
             <button
               type="button"
               disabled={cooldown > 0 || sending}
@@ -3364,7 +3393,7 @@ function ConfirmReopenSubmissionsModal({ assignment, teacherEmail, onCancel, onC
               </button>
               <button
                 onClick={verifyAndConfirm}
-                disabled={code.length !== 6 || verifying}
+                disabled={code.length !== 6 || verifying || expiresIn === 0}
                 className="text-sm font-semibold px-4 py-2 rounded-lg text-white transition disabled:opacity-40 disabled:cursor-not-allowed"
                 style={{ background: GOLD }}
               >
@@ -3388,6 +3417,7 @@ function ConfirmDeleteTestModal({ test, teacherEmail, onCancel, onConfirm }) {
   const [error, setError] = useState('')
   const [cooldown, setCooldown] = useState(0)
   const cooldownRef = useRef(null)
+  const { expiresIn, startExpiry } = useOtpExpiry()
 
   useEffect(() => () => clearInterval(cooldownRef.current), [])
 
@@ -3413,7 +3443,9 @@ function ConfirmDeleteTestModal({ test, teacherEmail, onCancel, onConfirm }) {
       setError(data?.error || 'Could not send code. Please try again.')
       return
     }
+    setCode('')
     startCooldown()
+    startExpiry()
     setStep('otp')
   }
 
@@ -3478,8 +3510,11 @@ function ConfirmDeleteTestModal({ test, teacherEmail, onCancel, onConfirm }) {
               onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
               onKeyDown={(e) => { if (e.key === 'Enter' && code.length === 6) verifyAndConfirm() }}
               placeholder="123456"
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-2 tracking-[0.3em] text-center focus:outline-none focus:ring-2 focus:ring-red-200"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-1 tracking-[0.3em] text-center focus:outline-none focus:ring-2 focus:ring-red-200"
             />
+            <p className="text-[11px] mb-2" style={{ color: expiresIn > 0 ? undefined : '#dc2626' }}>
+              {expiresIn > 0 ? `Code expires in ${formatOtpCountdown(expiresIn)}` : 'Code expired — resend a new one'}
+            </p>
             <button
               type="button"
               disabled={cooldown > 0 || sending}
@@ -3500,7 +3535,7 @@ function ConfirmDeleteTestModal({ test, teacherEmail, onCancel, onConfirm }) {
               </button>
               <button
                 onClick={verifyAndConfirm}
-                disabled={code.length !== 6 || verifying}
+                disabled={code.length !== 6 || verifying || expiresIn === 0}
                 className="text-sm font-semibold px-4 py-2 rounded-lg text-white bg-red-500 hover:bg-red-600 transition disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 {verifying ? 'Verifying…' : 'Delete Test'}
@@ -3559,11 +3594,19 @@ function StudentDetailModal({ student, scores, onClose }) {
     .slice().sort((a, b) => a.date.localeCompare(b.date))
     .map((s) => ({ date: s.date.slice(5), pct: +((s.score_obtained / s.total_marks) * 100).toFixed(1) }))
 
+  // Weighted by marks (sum scored / sum possible), not a plain mean of each
+  // test's percentage — otherwise a 10-mark test swings the average as much
+  // as a 100-mark test.
+  const weightedAvg = (rows) => {
+    const marks = rows.reduce((sum, s) => sum + s.total_marks, 0)
+    return marks > 0 ? +((rows.reduce((sum, s) => sum + s.score_obtained, 0) / marks) * 100).toFixed(1) : 0
+  }
+
   const sciRows  = appeared.filter((s) => s.subject === 'Science')
   const mathRows = appeared.filter((s) => s.subject === 'Maths')
   const subjectData = [
-    { subject: 'Science', avg: sciRows.length  ? +(sciRows.reduce((a, s)  => a + (s.score_obtained / s.total_marks) * 100, 0) / sciRows.length).toFixed(1)  : 0 },
-    { subject: 'Maths',   avg: mathRows.length ? +(mathRows.reduce((a, s) => a + (s.score_obtained / s.total_marks) * 100, 0) / mathRows.length).toFixed(1) : 0 },
+    { subject: 'Science', avg: weightedAvg(sciRows) },
+    { subject: 'Maths',   avg: weightedAvg(mathRows) },
   ]
 
   // Delta per score vs previous test (by date order)
@@ -3581,15 +3624,16 @@ function StudentDetailModal({ student, scores, onClose }) {
 
   const topicMap = {}
   appeared.forEach((s) => {
-    const key = s.topic_name
-    if (!topicMap[key]) topicMap[key] = { topic: key, subject: s.subject, total: 0, count: 0, best: 0, worst: 100 }
+    const key = normalizeTopicName(s.topic_name)
+    if (!topicMap[key]) topicMap[key] = { topic: key, subject: s.subject, scored: 0, marks: 0, count: 0, best: 0, worst: 100 }
     const pct = (s.score_obtained / s.total_marks) * 100
-    topicMap[key].total += pct
-    topicMap[key].count += 1
-    topicMap[key].best   = Math.max(topicMap[key].best, pct)
-    topicMap[key].worst  = Math.min(topicMap[key].worst, pct)
+    topicMap[key].scored += s.score_obtained
+    topicMap[key].marks  += s.total_marks
+    topicMap[key].count  += 1
+    topicMap[key].best    = Math.max(topicMap[key].best, pct)
+    topicMap[key].worst   = Math.min(topicMap[key].worst, pct)
   })
-  const topicStats    = Object.values(topicMap).map((t) => ({ ...t, avg: +(t.total / t.count).toFixed(1), best: +t.best.toFixed(1), worst: +t.worst.toFixed(1) }))
+  const topicStats    = Object.values(topicMap).map((t) => ({ ...t, avg: +((t.scored / t.marks) * 100).toFixed(1), best: +t.best.toFixed(1), worst: +t.worst.toFixed(1) }))
   const strongTopics  = topicStats.filter((t) => t.avg >= 80).sort((a, b) => b.avg - a.avg)
   const moderateTopics = topicStats.filter((t) => t.avg >= 60 && t.avg < 80).sort((a, b) => b.avg - a.avg)
   const weakTopics    = topicStats.filter((t) => t.avg < 60).sort((a, b) => a.avg - b.avg)
