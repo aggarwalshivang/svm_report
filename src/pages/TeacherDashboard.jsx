@@ -618,23 +618,18 @@ export default function TeacherDashboard() {
 
   async function saveTestEdit(test, newTotalMarks, minPercent) {
     setSavingTestEdit(true)
-    const oldTotalMarks = test.total_marks
 
-    // Rescale each student's obtained score proportionally so their percentage stays the same
-    // (e.g. 32/40 = 80% becomes 24/30 = 80% when the total is changed to 30).
-    const rescaled = test.scores.map((s) => ({
-      id: s.id,
-      score_obtained: s.is_absent
-        ? s.score_obtained
-        : Math.max(0, Math.min(newTotalMarks, Math.round((s.score_obtained / oldTotalMarks) * newTotalMarks))),
-    }))
+    // Total Marks is corrected as metadata only — obtained scores are left
+    // untouched (no proportional rescale), since edits here are almost always
+    // fixing a wrong total from the CSV import, not re-weighting the test.
 
     // Floor: anyone below this % of the new total marks gets bumped up to it.
     const floor = minPercent > 0 ? Math.round((minPercent / 100) * newTotalMarks) : 0
-    const isAbsent = new Map(test.scores.map((s) => [s.id, s.is_absent]))
-    const finalScores = rescaled.map((s) => ({
+    const finalScores = test.scores.map((s) => ({
       id: s.id,
-      score_obtained: (!isAbsent.get(s.id) && s.score_obtained < floor) ? floor : s.score_obtained,
+      score_obtained: s.is_absent
+        ? s.score_obtained
+        : Math.min(newTotalMarks, Math.max(s.score_obtained, floor)),
     }))
 
     const results = await Promise.all(finalScores.map((s) =>
@@ -2841,11 +2836,7 @@ function EditTestModal({ test, saving, onCancel, onSave }) {
   const validMin = Number.isFinite(minNum) && minNum >= 0 && minNum <= 100
   const floor = validTotal && validMin ? Math.round((minNum / 100) * totalNum) : null
   const affected = floor !== null
-    ? test.scores.filter((s) => {
-        if (s.is_absent) return false
-        const rescaled = Math.round((s.score_obtained / test.total_marks) * totalNum)
-        return rescaled < floor
-      }).length
+    ? test.scores.filter((s) => !s.is_absent && s.score_obtained < floor).length
     : 0
 
   return (
@@ -2868,7 +2859,7 @@ function EditTestModal({ test, saving, onCancel, onSave }) {
         />
         {validTotal && totalNum !== test.total_marks && (
           <p className="text-xs text-gray-400 mb-4">
-            All obtained scores will be rescaled proportionally to keep each student&apos;s percentage the same (e.g. {test.total_marks} → {totalNum}).
+            Obtained scores are left as-is — only the total marks ({test.total_marks} → {totalNum}) and each student&apos;s percentage will change.
           </p>
         )}
         {(!validTotal || totalNum === test.total_marks) && <div className="mb-4" />}
