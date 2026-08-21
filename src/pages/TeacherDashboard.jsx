@@ -630,9 +630,9 @@ export default function TeacherDashboard() {
   async function saveTestEdit(test, newTotalMarks, minPercent) {
     setSavingTestEdit(true)
 
-    // Total Marks is corrected as metadata only — obtained scores are left
-    // untouched (no proportional rescale), since edits here are almost always
-    // fixing a wrong total from the CSV import, not re-weighting the test.
+    // No proportional rescale. Scores are only clamped at the edges: anyone
+    // above the new total marks is capped down to it, anyone below the min%
+    // floor is bumped up to it. Everyone else keeps their exact score.
 
     // Floor: anyone below this % of the new total marks gets bumped up to it.
     const floor = minPercent > 0 ? Math.round((minPercent / 100) * newTotalMarks) : 0
@@ -2849,6 +2849,9 @@ function EditTestModal({ test, saving, onCancel, onSave }) {
   const affected = floor !== null
     ? test.scores.filter((s) => !s.is_absent && s.score_obtained < floor).length
     : 0
+  const cappedCount = validTotal
+    ? test.scores.filter((s) => !s.is_absent && s.score_obtained > totalNum).length
+    : 0
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={saving ? undefined : onCancel}>
@@ -2870,7 +2873,10 @@ function EditTestModal({ test, saving, onCancel, onSave }) {
         />
         {validTotal && totalNum !== test.total_marks && (
           <p className="text-xs text-gray-400 mb-4">
-            Obtained scores are left as-is — only the total marks ({test.total_marks} → {totalNum}) and each student&apos;s percentage will change.
+            Total marks ({test.total_marks} → {totalNum}) and every student&apos;s percentage will change.
+            {cappedCount > 0
+              ? ` ${cappedCount} student${cappedCount === 1 ? '' : 's'} scoring above ${totalNum} will be capped down to it — everyone else keeps their exact score.`
+              : ' Everyone else keeps their exact score.'}
           </p>
         )}
         {(!validTotal || totalNum === test.total_marks) && <div className="mb-4" />}
