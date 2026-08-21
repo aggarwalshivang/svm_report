@@ -1060,10 +1060,22 @@ const MAX_FILE_BYTES = 20 * 1024 * 1024
 // application errors (bad scan, rejected file, etc.) never hit this path.
 const MAX_UPLOAD_ATTEMPTS = 3
 
+// After a dropped connection, submit-worksheet keeps grading + writing to
+// the DB server-side for a while (its own FAST_PATH_MS/N8N_TIMEOUT_MS race,
+// up to ~170s on a slow-but-fine scan) even though the phone already gave up
+// on the fetch. A single instant check right after the drop almost always
+// runs before that write lands, so poll for a while before concluding the
+// upload actually failed — otherwise students get a false "connection
+// issue" error (or a wasted duplicate re-upload) for a submission that in
+// fact went through.
+const SUBMISSION_POLL_INTERVAL_MS = 4_000
+const SUBMISSION_POLL_ATTEMPTS = 10 // ~40s per dropped connection
+
 function AssignmentCard({ a, session, onSubmitted }) {
   const [file, setFile] = useState(null)
   const [uploading, setUploading] = useState(false)
   const [retryAttempt, setRetryAttempt] = useState(0)
+  const [verifying, setVerifying] = useState(false)
   const [error, setError] = useState('')
   // Set when submit-worksheet hands grading off to the background instead
   // of waiting on a slow n8n call (see FAST_PATH_MS there) — the file was
@@ -1084,6 +1096,16 @@ function AssignmentCard({ a, session, onSubmitted }) {
     if (f.type !== 'application/pdf') { setError('Only PDF files are accepted. Please convert your file to PDF and try again.'); setFile(null); return }
     if (f.size > MAX_FILE_BYTES) { setError('This file is too large. Please upload a file smaller than 20 MB.'); setFile(null); return }
     setFile(f)
+  }
+
+  async function checkSubmitted(startedAt) {
+    const { data } = await supabase
+      .from('assignment_submissions')
+      .select('submitted_at')
+      .eq('assignment_id', a.id)
+      .eq('student_id', session.studentId)
+      .maybeSingle()
+    return !!(data?.submitted_at && data.submitted_at >= startedAt)
   }
 
   async function submit() {
@@ -1135,16 +1157,18 @@ function AssignmentCard({ a, session, onSubmitted }) {
         // response back — after a slow n8n grading call on a flaky mobile
         // connection, the upload can easily have gone through and been
         // recorded server-side even though this fetch() looks failed here.
-        // Check before assuming it failed, otherwise a real submission
-        // looks like an error and the student re-uploads (re-triggering AI
-        // grading) for nothing.
-        const { data: existing } = await supabase
-          .from('assignment_submissions')
-          .select('submitted_at')
-          .eq('assignment_id', a.id)
-          .eq('student_id', session.studentId)
-          .maybeSingle()
-        if (existing?.submitted_at && existing.submitted_at >= startedAt) {
+        // The server keeps working after the phone's connection drops, so
+        // poll for a while rather than checking once — otherwise a real
+        // submission looks like an error (or gets silently re-uploaded,
+        // re-triggering AI grading for nothing).
+        setVerifying(true)
+        let confirmed = await checkSubmitted(startedAt)
+        for (let poll = 0; !confirmed && poll < SUBMISSION_POLL_ATTEMPTS; poll++) {
+          await new Promise((r) => setTimeout(r, SUBMISSION_POLL_INTERVAL_MS))
+          confirmed = await checkSubmitted(startedAt)
+        }
+        setVerifying(false)
+        if (confirmed) {
           setUploading(false)
           setRetryAttempt(0)
           setFile(null)
@@ -1235,14 +1259,19 @@ function AssignmentCard({ a, session, onSubmitted }) {
             style={{ background: GOLD }}
           >
             {uploading
-              ? (retryAttempt > 1 ? `Retrying… (${retryAttempt}/${MAX_UPLOAD_ATTEMPTS})` : 'Uploading…')
+              ? (verifying ? 'Checking…' : retryAttempt > 1 ? `Retrying… (${retryAttempt}/${MAX_UPLOAD_ATTEMPTS})` : 'Uploading…')
               : (a.deadline && new Date(a.deadline) < new Date())
                 ? 'Submit late'
                 : 'Submit'}
           </button>
         </div>
       )}
-      {uploading && retryAttempt > 1 && (
+      {uploading && verifying && (
+        <p className="text-xs font-medium" style={{ color: '#b45309' }}>
+          ⚠️ Connection dropped — checking whether your file already went through before retrying…
+        </p>
+      )}
+      {uploading && !verifying && retryAttempt > 1 && (
         <p className="text-xs font-medium" style={{ color: '#b45309' }}>
           ⚠️ Connection issue — retrying upload ({retryAttempt}/{MAX_UPLOAD_ATTEMPTS})…
         </p>
