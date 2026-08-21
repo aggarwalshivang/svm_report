@@ -362,8 +362,9 @@ export default function TeacherDashboard() {
     allScores.forEach((r) => {
       const student = scopeById.get(r.student_id)
       if (!student || r.is_absent || !countsForStudent(r, student)) return
-      const key = `${r.subject}||${r.topic_name}`
-      if (!map[key]) map[key] = { subject: r.subject, topic: r.topic_name, scored: 0, marks: 0, count: 0, tests: new Set(), best: 0, worst: 100 }
+      const topic = normalizeTopicName(r.topic_name)
+      const key = `${r.subject}||${topic}`
+      if (!map[key]) map[key] = { subject: r.subject, topic, scored: 0, marks: 0, count: 0, tests: new Set(), best: 0, worst: 100 }
       const pct = (r.score_obtained / r.total_marks) * 100
       map[key].scored += r.score_obtained
       map[key].marks  += r.total_marks
