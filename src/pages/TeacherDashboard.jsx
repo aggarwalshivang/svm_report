@@ -5,7 +5,7 @@ import {
   ReferenceLine, ResponsiveContainer, LineChart, Line, Cell, Legend,
 } from 'recharts'
 import { supabase } from '../lib/supabase'
-import { normalizeTopicName } from '../lib/topicName'
+import { normalizeTopicName, normalizeSubject } from '../lib/topicName'
 import { useOtpExpiry, formatOtpCountdown } from '../lib/useOtpExpiry'
 import { ThemeToggle } from '../lib/theme.jsx'
 import {
@@ -272,7 +272,7 @@ export default function TeacherDashboard() {
       setWorksheetReport(wr || [])
       setAssignmentSubmissions(subs)
       setWorksheetFeedback(wfb)
-      setAllScores(allRows)
+      setAllScores(allRows.map((r) => ({ ...r, subject: normalizeSubject(r.subject) })))
       setLoading(false)
     }
     load()
@@ -362,19 +362,25 @@ export default function TeacherDashboard() {
     allScores.forEach((r) => {
       const student = scopeById.get(r.student_id)
       if (!student || r.is_absent || !countsForStudent(r, student)) return
+      // Group by chapter name alone (not subject) — legacy rows tag the same
+      // chapter with inconsistent/wrong subjects (e.g. a Maths chapter
+      // mistakenly logged under Science), which used to split one chapter
+      // across several rows in this table. The displayed subject is decided
+      // by majority vote below.
       const topic = normalizeTopicName(r.topic_name)
-      const key = `${r.subject}||${topic}`
-      if (!map[key]) map[key] = { subject: r.subject, topic, scored: 0, marks: 0, count: 0, tests: new Set(), best: 0, worst: 100 }
+      if (!map[topic]) map[topic] = { topic, subjectCounts: {}, scored: 0, marks: 0, count: 0, tests: new Set(), best: 0, worst: 100 }
       const pct = (r.score_obtained / r.total_marks) * 100
-      map[key].scored += r.score_obtained
-      map[key].marks  += r.total_marks
-      map[key].count  += 1
-      map[key].tests.add(`${r.date}|${r.topic_name}|${r.total_marks}`)
-      map[key].best  = Math.max(map[key].best, pct)
-      map[key].worst = Math.min(map[key].worst, pct)
+      map[topic].subjectCounts[r.subject] = (map[topic].subjectCounts[r.subject] || 0) + 1
+      map[topic].scored += r.score_obtained
+      map[topic].marks  += r.total_marks
+      map[topic].count  += 1
+      map[topic].tests.add(`${r.date}|${r.topic_name}|${r.total_marks}`)
+      map[topic].best  = Math.max(map[topic].best, pct)
+      map[topic].worst = Math.min(map[topic].worst, pct)
     })
-    return Object.values(map).map((t) => ({
+    return Object.values(map).map(({ subjectCounts, ...t }) => ({
       ...t,
+      subject: Object.entries(subjectCounts).sort((a, b) => b[1] - a[1])[0][0],
       avg:   +((t.scored / t.marks) * 100).toFixed(1),
       best:  +t.best.toFixed(1),
       worst: +t.worst.toFixed(1),

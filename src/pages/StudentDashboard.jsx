@@ -5,7 +5,7 @@ import {
   BarChart, Bar, ResponsiveContainer, ComposedChart, Cell,
 } from 'recharts'
 import { supabase } from '../lib/supabase'
-import { normalizeTopicName } from '../lib/topicName'
+import { normalizeTopicName, normalizeSubject } from '../lib/topicName'
 import { ThemeToggle } from '../lib/theme.jsx'
 import {
   computeSubmissionPerformance, aggregateChapterStats, aggregateSubjectStats,
@@ -127,7 +127,8 @@ export default function StudentDashboard() {
         .eq('student_id', session.studentId)
         .order('date', { ascending: true })
 
-      const rows = cutoff ? (data || []).filter((s) => s.date >= cutoff) : (data || [])
+      const rows = (cutoff ? (data || []).filter((s) => s.date >= cutoff) : (data || []))
+        .map((s) => ({ ...s, subject: normalizeSubject(s.subject) }))
       setScores(rows)
       setLoading(false)
     }
