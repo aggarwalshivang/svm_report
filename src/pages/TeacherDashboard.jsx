@@ -3593,14 +3593,47 @@ function StudentDetailModal({ student, scores, onClose }) {
   const [sortBy, setSortBy] = useState('date-desc')
 
   const appeared = scores.filter((s) => !s.is_absent)
-  const displayed = useMemo(() => {
-    let rows = subjectFilter === 'All' ? [...scores] : scores.filter((s) => s.subject === subjectFilter)
-    if (sortBy === 'date-asc')  rows.sort((a, b) => a.date.localeCompare(b.date))
-    if (sortBy === 'date-desc') rows.sort((a, b) => b.date.localeCompare(a.date))
-    if (sortBy === 'pct-asc')   rows.sort((a, b) => (a.is_absent ? -1 : a.score_obtained / a.total_marks) - (b.is_absent ? -1 : b.score_obtained / b.total_marks))
-    if (sortBy === 'pct-desc')  rows.sort((a, b) => (b.is_absent ? -1 : b.score_obtained / b.total_marks) - (a.is_absent ? -1 : a.score_obtained / a.total_marks))
-    if (sortBy === 'subject')   rows.sort((a, b) => a.subject.localeCompare(b.subject))
-    return rows
+
+  // One row per topic: attempts on the same topic are merged (weighted-avg
+  // score/%, per-topic trend from first → latest attempt) instead of listing
+  // each test separately.
+  const groupedScores = useMemo(() => {
+    const rows = subjectFilter === 'All' ? scores : scores.filter((s) => s.subject === subjectFilter)
+
+    const map = {}
+    rows.forEach((s) => {
+      const key = `${s.subject}::${normalizeTopicName(s.topic_name)}`
+      if (!map[key]) {
+        map[key] = { key, subject: s.subject, topic: normalizeTopicName(s.topic_name), scored: 0, marks: 0, count: 0, latestDate: s.date, tests: [] }
+      }
+      const g = map[key]
+      g.count += 1
+      if (s.date > g.latestDate) g.latestDate = s.date
+      if (!s.is_absent) {
+        g.scored += s.score_obtained
+        g.marks  += s.total_marks
+        g.tests.push(s)
+      }
+    })
+
+    const groups = Object.values(map).map((g) => {
+      const pct = g.marks > 0 ? +((g.scored / g.marks) * 100).toFixed(1) : null
+      const sortedTests = [...g.tests].sort((a, b) => a.date.localeCompare(b.date))
+      let trend = null
+      if (sortedTests.length >= 2) {
+        const firstPct = (sortedTests[0].score_obtained / sortedTests[0].total_marks) * 100
+        const lastPct  = (sortedTests[sortedTests.length - 1].score_obtained / sortedTests[sortedTests.length - 1].total_marks) * 100
+        trend = +(lastPct - firstPct).toFixed(1)
+      }
+      return { ...g, pct, trend }
+    })
+
+    if (sortBy === 'date-asc')  groups.sort((a, b) => a.latestDate.localeCompare(b.latestDate))
+    if (sortBy === 'date-desc') groups.sort((a, b) => b.latestDate.localeCompare(a.latestDate))
+    if (sortBy === 'pct-asc')   groups.sort((a, b) => (a.pct ?? -1) - (b.pct ?? -1))
+    if (sortBy === 'pct-desc')  groups.sort((a, b) => (b.pct ?? -1) - (a.pct ?? -1))
+    if (sortBy === 'subject')   groups.sort((a, b) => a.subject.localeCompare(b.subject))
+    return groups
   }, [scores, subjectFilter, sortBy])
 
   const chartData = appeared
@@ -3622,18 +3655,6 @@ function StudentDetailModal({ student, scores, onClose }) {
     { subject: 'Maths',   avg: weightedAvg(mathRows) },
   ]
 
-  // Delta per score vs previous test (by date order)
-  const deltaMap = useMemo(() => {
-    const sorted = [...appeared].sort((a, b) => a.date.localeCompare(b.date))
-    const map = {}
-    sorted.forEach((s, i) => {
-      if (i === 0) { map[s.id] = null; return }
-      const prev = (sorted[i - 1].score_obtained / sorted[i - 1].total_marks) * 100
-      const curr = (s.score_obtained / s.total_marks) * 100
-      map[s.id] = +(curr - prev).toFixed(1)
-    })
-    return map
-  }, [appeared])
 
   const topicMap = {}
   appeared.forEach((s) => {
@@ -3775,7 +3796,9 @@ function StudentDetailModal({ student, scores, onClose }) {
                       >{label}</button>
                     ))}
                   </div>
-                  <span className="ml-auto text-[10px] text-gray-400">{displayed.length} tests</span>
+                  <span className="ml-auto text-[10px] text-gray-400">
+                    {groupedScores.length} topic{groupedScores.length === 1 ? '' : 's'} · {groupedScores.reduce((sum, g) => sum + g.count, 0)} tests
+                  </span>
                 </div>
 
                 {/* Scrollable table */}
@@ -3802,31 +3825,30 @@ function StudentDetailModal({ student, scores, onClose }) {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-amber-100">
-                        {displayed.map((s) => {
-                          const pct   = s.is_absent ? null : +((s.score_obtained / s.total_marks) * 100).toFixed(1)
-                          const delta = s.is_absent ? null : deltaMap[s.id]
-                          return (
-                            <tr key={s.id} className="bg-white hover:bg-amber-50 transition-colors">
-                              <td className="px-4 py-2.5 text-gray-500 text-xs">{s.date}</td>
-                              <td className="px-4 py-2.5">
-                                <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${s.subject === 'Science' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>{s.subject}</span>
-                              </td>
-                              <td className="px-4 py-2.5 text-gray-700 max-w-[180px] truncate text-xs font-medium">{s.topic_name}</td>
-                              <td className="px-4 py-2.5 text-center font-semibold text-gray-800 text-sm">
-                                {s.is_absent ? <span className="text-red-400 text-xs font-medium">Absent</span> : s.score_obtained}
-                              </td>
-                              <td className="px-4 py-2.5 text-center text-gray-500 text-sm">{s.total_marks}</td>
-                              <td className="px-4 py-2.5 text-center">
-                                {pct !== null
-                                  ? <span className={`font-bold text-sm ${pct >= 80 ? 'text-green-600' : pct >= 60 ? 'text-amber-600' : 'text-red-500'}`}>{pct}%</span>
-                                  : <span className="text-gray-300">—</span>}
-                              </td>
-                              <td className="px-4 py-2.5 text-center hidden sm:table-cell">
-                                <DeltaBadge delta={delta} />
-                              </td>
-                            </tr>
-                          )
-                        })}
+                        {groupedScores.map((g) => (
+                          <tr key={g.key} className="bg-white hover:bg-amber-50 transition-colors">
+                            <td className="px-4 py-2.5 text-gray-500 text-xs">{g.latestDate}</td>
+                            <td className="px-4 py-2.5">
+                              <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${g.subject === 'Science' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>{g.subject}</span>
+                            </td>
+                            <td className="px-4 py-2.5 text-gray-700 max-w-[180px] truncate text-xs font-medium">
+                              {g.topic}
+                              {g.count > 1 && <span className="ml-1.5 text-gray-400">×{g.count}</span>}
+                            </td>
+                            <td className="px-4 py-2.5 text-center font-semibold text-gray-800 text-sm">
+                              {g.marks > 0 ? g.scored : <span className="text-red-400 text-xs font-medium">Absent</span>}
+                            </td>
+                            <td className="px-4 py-2.5 text-center text-gray-500 text-sm">{g.marks > 0 ? g.marks : '—'}</td>
+                            <td className="px-4 py-2.5 text-center">
+                              {g.pct !== null
+                                ? <span className={`font-bold text-sm ${g.pct >= 80 ? 'text-green-600' : g.pct >= 60 ? 'text-amber-600' : 'text-red-500'}`}>{g.pct}%</span>
+                                : <span className="text-gray-300">—</span>}
+                            </td>
+                            <td className="px-4 py-2.5 text-center hidden sm:table-cell">
+                              <DeltaBadge delta={g.trend} />
+                            </td>
+                          </tr>
+                        ))}
                       </tbody>
                     </table>
                 </div>

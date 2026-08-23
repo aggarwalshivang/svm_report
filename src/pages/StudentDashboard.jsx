@@ -341,19 +341,6 @@ export default function StudentDashboard() {
       subject: s.subject,
     }))
 
-  // Delta map: change vs previous test, keyed by score id
-  const deltaMap = useMemo(() => {
-    const sorted = [...appeared].sort((a, b) => a.date.localeCompare(b.date))
-    const map = {}
-    sorted.forEach((s, i) => {
-      if (i === 0) { map[s.id] = null; return }
-      const prevPct = (sorted[i - 1].score_obtained / sorted[i - 1].total_marks) * 100
-      const currPct = (s.score_obtained / s.total_marks) * 100
-      map[s.id] = +(currPct - prevPct).toFixed(1)
-    })
-    return map
-  }, [appeared])
-
   const subjectChartData = [
     { subject: 'Science', avg: Number(sciAvg) },
     { subject: 'Maths',   avg: Number(mathAvg) },
@@ -361,22 +348,46 @@ export default function StudentDashboard() {
 
   const recentTests = [...scores].reverse().slice(0, 5)
 
-  const displayedScores = useMemo(() => {
-    let rows = subjectFilter === 'All' ? [...scores] : scores.filter((s) => s.subject === subjectFilter)
-    if (sortBy === 'date-asc')  rows.sort((a, b) => a.date.localeCompare(b.date))
-    if (sortBy === 'date-desc') rows.sort((a, b) => b.date.localeCompare(a.date))
-    if (sortBy === 'pct-asc')   rows.sort((a, b) => {
-      const pa = a.is_absent ? -1 : a.score_obtained / a.total_marks
-      const pb = b.is_absent ? -1 : b.score_obtained / b.total_marks
-      return pa - pb
+  // One row per topic: attempts on the same topic are merged (weighted-avg
+  // score/%, per-topic trend from first → latest attempt) instead of listing
+  // each test separately.
+  const groupedScores = useMemo(() => {
+    const rows = subjectFilter === 'All' ? scores : scores.filter((s) => s.subject === subjectFilter)
+
+    const map = {}
+    rows.forEach((s) => {
+      const key = `${s.subject}::${normalizeTopicName(s.topic_name)}`
+      if (!map[key]) {
+        map[key] = { key, subject: s.subject, topic: normalizeTopicName(s.topic_name), scored: 0, marks: 0, count: 0, latestDate: s.date, tests: [] }
+      }
+      const g = map[key]
+      g.count += 1
+      if (s.date > g.latestDate) g.latestDate = s.date
+      if (!s.is_absent) {
+        g.scored += s.score_obtained
+        g.marks  += s.total_marks
+        g.tests.push(s)
+      }
     })
-    if (sortBy === 'pct-desc')  rows.sort((a, b) => {
-      const pa = a.is_absent ? -1 : a.score_obtained / a.total_marks
-      const pb = b.is_absent ? -1 : b.score_obtained / b.total_marks
-      return pb - pa
+
+    const groups = Object.values(map).map((g) => {
+      const pct = g.marks > 0 ? +((g.scored / g.marks) * 100).toFixed(1) : null
+      const sortedTests = [...g.tests].sort((a, b) => a.date.localeCompare(b.date))
+      let trend = null
+      if (sortedTests.length >= 2) {
+        const firstPct = (sortedTests[0].score_obtained / sortedTests[0].total_marks) * 100
+        const lastPct  = (sortedTests[sortedTests.length - 1].score_obtained / sortedTests[sortedTests.length - 1].total_marks) * 100
+        trend = +(lastPct - firstPct).toFixed(1)
+      }
+      return { ...g, pct, trend }
     })
-    if (sortBy === 'subject')   rows.sort((a, b) => a.subject.localeCompare(b.subject))
-    return rows
+
+    if (sortBy === 'date-asc')  groups.sort((a, b) => a.latestDate.localeCompare(b.latestDate))
+    if (sortBy === 'date-desc') groups.sort((a, b) => b.latestDate.localeCompare(a.latestDate))
+    if (sortBy === 'pct-asc')   groups.sort((a, b) => (a.pct ?? -1) - (b.pct ?? -1))
+    if (sortBy === 'pct-desc')  groups.sort((a, b) => (b.pct ?? -1) - (a.pct ?? -1))
+    if (sortBy === 'subject')   groups.sort((a, b) => a.subject.localeCompare(b.subject))
+    return groups
   }, [scores, subjectFilter, sortBy])
 
   if (loading) return (
@@ -600,7 +611,9 @@ export default function StudentDashboard() {
                     >{label}</button>
                   ))}
                 </div>
-                <span className="ml-auto text-xs text-gray-400">{displayedScores.length} tests</span>
+                <span className="ml-auto text-xs text-gray-400">
+                  {groupedScores.length} topic{groupedScores.length === 1 ? '' : 's'} · {groupedScores.reduce((sum, g) => sum + g.count, 0)} tests
+                </span>
               </div>
 
               {/* Scrollable table */}
@@ -627,36 +640,35 @@ export default function StudentDashboard() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-50">
-                      {displayedScores.map((s) => {
-                        const pct   = s.is_absent ? null : +((s.score_obtained / s.total_marks) * 100).toFixed(1)
-                        const delta = s.is_absent ? null : deltaMap[s.id]
-                        return (
-                          <tr key={s.id} className="hover:bg-amber-50 transition">
-                            <td className="px-5 py-3 text-gray-600 text-xs">{s.date}</td>
-                            <td className="px-5 py-3">
-                              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${s.subject === 'Science' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>
-                                {s.subject}
-                              </span>
-                            </td>
-                            <td className="px-5 py-3 text-gray-700 max-w-xs truncate">{s.topic_name}</td>
-                            <td className="px-5 py-3 text-center font-medium text-gray-800">
-                              {s.is_absent ? <span className="text-red-500 text-xs">Absent</span> : s.score_obtained}
-                            </td>
-                            <td className="px-5 py-3 text-center text-gray-500">{s.total_marks}</td>
-                            <td className="px-5 py-3 text-center">
-                              {pct !== null
-                                ? <span className={`font-bold text-sm ${pct >= 80 ? 'text-green-600' : pct >= 60 ? 'text-amber-600' : 'text-red-500'}`}>{pct}%</span>
-                                : '—'}
-                            </td>
-                            <td className="px-5 py-3 text-center hidden sm:table-cell">
-                              <DeltaBadge delta={delta} />
-                            </td>
-                          </tr>
-                        )
-                      })}
+                      {groupedScores.map((g) => (
+                        <tr key={g.key} className="hover:bg-amber-50 transition">
+                          <td className="px-5 py-3 text-gray-600 text-xs">{g.latestDate}</td>
+                          <td className="px-5 py-3">
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${g.subject === 'Science' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>
+                              {g.subject}
+                            </span>
+                          </td>
+                          <td className="px-5 py-3 text-gray-700 max-w-xs truncate">
+                            {g.topic}
+                            {g.count > 1 && <span className="ml-1.5 text-xs text-gray-400">×{g.count}</span>}
+                          </td>
+                          <td className="px-5 py-3 text-center font-medium text-gray-800">
+                            {g.marks > 0 ? g.scored : <span className="text-red-500 text-xs">Absent</span>}
+                          </td>
+                          <td className="px-5 py-3 text-center text-gray-500">{g.marks > 0 ? g.marks : '—'}</td>
+                          <td className="px-5 py-3 text-center">
+                            {g.pct !== null
+                              ? <span className={`font-bold text-sm ${g.pct >= 80 ? 'text-green-600' : g.pct >= 60 ? 'text-amber-600' : 'text-red-500'}`}>{g.pct}%</span>
+                              : '—'}
+                          </td>
+                          <td className="px-5 py-3 text-center hidden sm:table-cell">
+                            <DeltaBadge delta={g.trend} />
+                          </td>
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
-                  {displayedScores.length === 0 && <p className="text-center text-gray-400 py-10 text-sm">No tests found.</p>}
+                  {groupedScores.length === 0 && <p className="text-center text-gray-400 py-10 text-sm">No tests found.</p>}
               </div>
             </>
           )}
