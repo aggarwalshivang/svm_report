@@ -100,6 +100,7 @@ export default function StudentDashboard() {
   const [sortBy, setSortBy] = useState('date-desc') // date-asc | date-desc | pct-asc | pct-desc | subject
   const [classRank, setClassRank] = useState(null)
   const [classSize, setClassSize] = useState(null)
+  const [classRankTrend, setClassRankTrend] = useState(null)
   const [assignments, setAssignments] = useState([])
   const [submissions, setSubmissions] = useState([]) // this student's assignment_submissions rows
   const [worksheetFeedback, setWorksheetFeedback] = useState([]) // this student's worksheet_feedback rows
@@ -147,6 +148,7 @@ export default function StudentDashboard() {
       if (error || !data) return
       setClassRank(data.rank ?? null)
       setClassSize(data.class_size ?? null)
+      setClassRankTrend(data.trend ?? null)
     }
     computeRank()
   }, [session?.studentId, session?.class])
@@ -292,6 +294,21 @@ export default function StudentDashboard() {
     navigate('/')
   }
 
+  // Set by TeacherDashboard.jsx's "View as Student" — restores the
+  // teacher's own Supabase session (stashed before switching to this
+  // student's) instead of making them log in again.
+  function returnToTeacher() {
+    const raw = sessionStorage.getItem('svm_impersonation_backup')
+    if (!raw) return
+    const backup = JSON.parse(raw)
+    supabase.auth.setSession({ access_token: backup.access_token, refresh_token: backup.refresh_token }).then(() => {
+      sessionStorage.removeItem('svm_impersonation_backup')
+      localStorage.setItem('svm_session', JSON.stringify(backup.teacherSvmSession))
+      navigate('/teacher')
+    })
+  }
+  const impersonating = !!sessionStorage.getItem('svm_impersonation_backup')
+
   const appeared = useMemo(() => scores.filter((s) => !s.is_absent), [scores])
   const absentCount = scores.filter((s) => s.is_absent).length
 
@@ -434,6 +451,19 @@ export default function StudentDashboard() {
         </div>
       </nav>
 
+      {impersonating && (
+        <div className="px-5 py-2 flex items-center justify-between gap-3 text-xs sm:text-sm font-semibold" style={{ background: '#c8860a', color: 'white' }}>
+          <span>👀 Viewing as {session?.studentName} — a teacher opened this dashboard.</span>
+          <button
+            onClick={returnToTeacher}
+            className="px-3 py-1 rounded-lg font-bold flex-shrink-0"
+            style={{ background: 'white', color: '#c8860a' }}
+          >
+            Return to Teacher Dashboard
+          </button>
+        </div>
+      )}
+
       <div className="max-w-6xl mx-auto p-3 sm:p-6 space-y-5">
 
         {/* ── SECTION SWITCHER ── */}
@@ -468,6 +498,7 @@ export default function StudentDashboard() {
             label="Class Rank"
             value={classRank != null ? `#${classRank}` : classSize !== null ? '—' : '…'}
             sub={classSize !== null ? `out of ${classSize} in Class ${session?.class}` : 'Computing…'}
+            trend={classRank != null ? classRankTrend : null}
             type="rank"
           />
         </div>
@@ -1299,7 +1330,15 @@ function AssignmentCard({ a, session, onSubmitted }) {
   )
 }
 
-function StatCard({ label, value, sub, type }) {
+// Same wording/colors as TeacherDashboard.jsx's "Rank Trend" column, so the
+// signal reads the same in both dashboards.
+const RANK_TREND_LABEL = {
+  improving: { text: '▲ Improving', color: '#4ade80' },
+  declining: { text: '▼ Declining', color: '#f87171' },
+  stable:    { text: '→ Stable',    color: '#c8860a' },
+}
+
+function StatCard({ label, value, sub, trend, type }) {
   const styles = {
     gold:  { accent: '#c8860a',  subColor: '#6b7280' },
     green: { accent: '#22c55e',  subColor: '#6b7280' },
@@ -1308,6 +1347,7 @@ function StatCard({ label, value, sub, type }) {
     rank:  { accent: '#c8860a',  subColor: '#6b7280' },
   }
   const s = styles[type]
+  const trendInfo = trend ? RANK_TREND_LABEL[trend] : null
   return (
     <div className="bg-white rounded-xl overflow-hidden shadow-sm border border-gray-100">
       <div className="h-1 w-full" style={{ background: s.accent }} />
@@ -1315,6 +1355,7 @@ function StatCard({ label, value, sub, type }) {
         <p className="text-[11px] font-semibold uppercase tracking-wider mb-1.5 text-gray-400">{label}</p>
         <p className="text-2xl font-bold leading-tight text-gray-800">{value}</p>
         {sub && <p className="text-xs mt-1.5 text-gray-500">{sub}</p>}
+        {trendInfo && <p className="text-xs mt-1 font-bold" style={{ color: trendInfo.color }}>{trendInfo.text}</p>}
       </div>
     </div>
   )

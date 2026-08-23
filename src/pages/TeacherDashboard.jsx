@@ -284,6 +284,47 @@ export default function TeacherDashboard() {
     navigate('/')
   }
 
+  // "View as student" — opens the student's dashboard as them, without ever
+  // knowing/entering their password. impersonate-student (service role)
+  // mints a one-time magic-link token; verifyOtp trades it for a real
+  // session carrying the student's own app_metadata claims, so RLS sees an
+  // ordinary student login. The teacher's own session is stashed in
+  // sessionStorage first so "Return to Teacher Dashboard" can restore it
+  // with supabase.auth.setSession() instead of requiring a re-login.
+  async function viewAsStudent(student) {
+    const { data: { session: teacherAuthSession } } = await supabase.auth.getSession()
+    if (!teacherAuthSession) { alert('Your session expired — please log in again.'); return }
+
+    const { data, error } = await supabase.functions.invoke('impersonate-student', {
+      body: { student_id: student.student_id },
+    })
+    if (error || data?.ok === false) {
+      alert(`Could not open ${student.student_name}'s dashboard: ${data?.error || error?.message}`)
+      return
+    }
+
+    const { error: otpErr } = await supabase.auth.verifyOtp({
+      email: data.email,
+      token: data.token,
+      type: 'magiclink',
+    })
+    if (otpErr) { alert(`Could not open ${student.student_name}'s dashboard: ${otpErr.message}`); return }
+
+    sessionStorage.setItem('svm_impersonation_backup', JSON.stringify({
+      access_token: teacherAuthSession.access_token,
+      refresh_token: teacherAuthSession.refresh_token,
+      teacherSvmSession: session,
+    }))
+    localStorage.setItem('svm_session', JSON.stringify({
+      role: 'student',
+      studentId: student.student_id,
+      studentName: data.student_name,
+      class: data.class,
+      email: data.email,
+    }))
+    navigate('/student')
+  }
+
   const studentSummary = useMemo(() => {
     const seenIds = new Set()
     const uniqueStudents = students.filter((s) => { if (seenIds.has(s.student_id)) return false; seenIds.add(s.student_id); return true })
@@ -312,22 +353,29 @@ export default function TeacherDashboard() {
       const positivePct = totalMarks > 0 ? +((totalScored / totalMarks) * 100).toFixed(1) : null
       const negativePct = totalMarks > 0 ? +((totalLost   / totalMarks) * 100).toFixed(1) : null
       const sorted = [...appeared].sort((a, b) => a.date.localeCompare(b.date))
-      const avg3 = (arr) => weightedAvg(arr) ?? 0
-      let trend = null
-      if (sorted.length >= 6) {
-        const delta = avg3(sorted.slice(-3)) - avg3(sorted.slice(0, 3))
-        trend = delta > 5 ? 'up' : delta < -5 ? 'down' : 'stable'
-      }
-      return { ...s, totalTests: rows.length, appeared: appeared.length, absentCount, avgPct, sciAvg, mathAvg, totalScored, totalMarks, totalLost, positivePct, negativePct, trend }
+      // There's no stored rank history, so "previous rank" is approximated by
+      // dropping this student's single most-recent test and recomputing their
+      // weighted avg — mirrors get_my_class_rank()'s prev_avg_pct in
+      // scripts/add-rank-trend-to-rpc.sql, which StudentDashboard.jsx uses.
+      const prevAvgPctNum = sorted.length >= 2 ? weightedAvg(sorted.slice(0, -1)) : null
+      return { ...s, totalTests: rows.length, appeared: appeared.length, absentCount, avgPct, sciAvg, mathAvg, totalScored, totalMarks, totalLost, positivePct, negativePct, avgPctNum, prevAvgPctNum, testCount: sorted.length }
     })
 
-    // Compute rank within each class
+    // Compute rank within each class, plus a rank trend (stable/improving/
+    // declining) from the current vs. approximated-previous ranking.
     ;[9, 10].forEach((cls) => {
-      const inClass = summaries.filter((s) => s.class === cls && s.avgPct !== null)
-        .sort((a, b) => Number(b.avgPct) - Number(a.avgPct))
+      const inClass = summaries.filter((s) => s.class === cls && s.avgPctNum !== null)
+      const byCurrent = [...inClass].sort((a, b) => b.avgPctNum - a.avgPctNum)
+      const byPrevious = [...inClass].sort((a, b) => (b.prevAvgPctNum ?? b.avgPctNum) - (a.prevAvgPctNum ?? a.avgPctNum))
+      const prevRankById = new Map(byPrevious.map((s, i) => [s.student_id, i + 1]))
       const classSize = summaries.filter((s) => s.class === cls).length
-      inClass.forEach((s, i) => { s.rank = i + 1; s.classSize = classSize })
-      summaries.filter((s) => s.class === cls && s.avgPct === null).forEach((s) => { s.rank = null; s.classSize = classSize })
+      byCurrent.forEach((s, i) => {
+        s.rank = i + 1
+        s.classSize = classSize
+        const prevRank = prevRankById.get(s.student_id)
+        s.trend = s.testCount >= 2 ? (prevRank > s.rank ? 'improving' : prevRank < s.rank ? 'declining' : 'stable') : null
+      })
+      summaries.filter((s) => s.class === cls && s.avgPctNum === null).forEach((s) => { s.rank = null; s.classSize = classSize; s.trend = null })
     })
 
     return summaries
@@ -1855,7 +1903,7 @@ function ini(name) {
                       <TH col="avgPct" className="text-center">Avg %</TH>
                       <TH col="sciAvg" className="text-center hidden md:table-cell">Science</TH>
                       <TH col="mathAvg" className="text-center hidden md:table-cell">Maths</TH>
-                      <th className="px-3 sm:px-5 py-3 text-center hidden lg:table-cell">Trend</th>
+                      <th className="px-3 sm:px-5 py-3 text-center hidden lg:table-cell">Rank Trend</th>
                       <TH col="positivePct" className="text-center hidden lg:table-cell" style={{ color: '#4ade80' }}>+ve %</TH>
                       <TH col="negativePct" className="text-center hidden lg:table-cell" style={{ color: '#f87171' }}>-ve %</TH>
                       <TH col="absentCount" className="text-center hidden sm:table-cell">Absent</TH>
@@ -1890,10 +1938,10 @@ function ini(name) {
                     <td className="px-3 sm:px-5 py-3 text-center hidden md:table-cell"><PctBadge pct={s.sciAvg} /></td>
                     <td className="px-3 sm:px-5 py-3 text-center hidden md:table-cell"><PctBadge pct={s.mathAvg} /></td>
                     <td className="px-3 sm:px-5 py-3 text-center hidden lg:table-cell">
-                      {s.trend === 'up'
-                        ? <span className="text-xs font-bold" style={{ color: '#4ade80' }}>▲ Up</span>
-                        : s.trend === 'down'
-                          ? <span className="text-xs font-bold" style={{ color: '#f87171' }}>▼ Down</span>
+                      {s.trend === 'improving'
+                        ? <span className="text-xs font-bold" style={{ color: '#4ade80' }}>▲ Improving</span>
+                        : s.trend === 'declining'
+                          ? <span className="text-xs font-bold" style={{ color: '#f87171' }}>▼ Declining</span>
                           : s.trend === 'stable'
                             ? <span className="text-xs font-bold" style={{ color: '#c8860a' }}>→ Stable</span>
                             : <span className="text-xs" style={{ color: 'var(--faint)' }}>—</span>
@@ -2658,6 +2706,7 @@ function ini(name) {
           student={selected}
           scores={allScores.filter((r) => r.student_id === selected.student_id && countsForStudent(r, selected))}
           onClose={() => setSelected(null)}
+          onViewAsStudent={() => viewAsStudent(selected)}
         />
       )}
 
@@ -3587,7 +3636,7 @@ function StatCard({ label, value, type }) {
   )
 }
 
-function StudentDetailModal({ student, scores, onClose }) {
+function StudentDetailModal({ student, scores, onClose, onViewAsStudent }) {
   const [tab, setTab] = useState('all')
   const [subjectFilter, setSubjectFilter] = useState('All')
   const [sortBy, setSortBy] = useState('date-desc')
@@ -3689,7 +3738,17 @@ function StudentDetailModal({ student, scores, onClose }) {
             <h2 className="text-lg font-bold text-gray-800">{student.student_name}</h2>
             <span className="px-2 py-0.5 rounded-full text-xs font-bold text-white" style={{ background: GOLD }}>Class {student.class}</span>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">×</button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={onViewAsStudent}
+              className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white transition"
+              style={{ background: GOLD }}
+              title="Open this student's dashboard exactly as they see it"
+            >
+              👀 View as Student
+            </button>
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">×</button>
+          </div>
         </div>
 
         <div className="p-6 space-y-5">
