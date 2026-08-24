@@ -3939,7 +3939,7 @@ function StudentDetailModal({ student, scores, onClose, onViewAsStudent }) {
                                 <tr key={t.id} className="text-xs" style={{ background: 'rgba(200,134,10,0.04)' }}>
                                   <td className="px-4 py-2 text-gray-500 pl-8">{t.date}</td>
                                   <td className="px-4 py-2" />
-                                  <td className="px-4 py-2 text-gray-500 pl-8">↳ individual test</td>
+                                  <td className="px-4 py-2 text-gray-500 pl-8">↳ {t.topic_name}</td>
                                   <td className="px-4 py-2 text-center text-gray-700">
                                     {t.is_absent ? <span className="text-red-400 text-xs font-medium">Absent</span> : t.score_obtained}
                                   </td>

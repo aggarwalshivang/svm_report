@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, Fragment } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine,
@@ -432,6 +432,20 @@ export default function StudentDashboard() {
     return groups
   }, [scores, subjectFilter, sortBy])
 
+  // Every individual test as its own row (no topic grouping/nesting) — each
+  // still carries the delta vs. the previous attempt on the same topic,
+  // computed above in groupedScores.
+  const allTestRows = useMemo(() => {
+    const rows = groupedScores.flatMap((g) => g.history)
+    const pctOf = (t) => (t.is_absent ? -1 : (t.score_obtained / t.total_marks) * 100)
+    if (sortBy === 'date-asc')  rows.sort((a, b) => a.date.localeCompare(b.date))
+    if (sortBy === 'date-desc') rows.sort((a, b) => b.date.localeCompare(a.date))
+    if (sortBy === 'pct-asc')   rows.sort((a, b) => pctOf(a) - pctOf(b))
+    if (sortBy === 'pct-desc')  rows.sort((a, b) => pctOf(b) - pctOf(a))
+    if (sortBy === 'subject')   rows.sort((a, b) => a.subject.localeCompare(b.subject))
+    return rows
+  }, [groupedScores, sortBy])
+
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center" style={{ background: DARK }}>
       <div className="text-center">
@@ -700,59 +714,35 @@ export default function StudentDashboard() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-50">
-                      {groupedScores.map((g) => (
-                        <Fragment key={g.key}>
-                          <tr className="hover:bg-amber-50 transition">
-                            <td className="px-5 py-3 text-gray-600 text-xs">{g.latestDate}</td>
+                      {allTestRows.map((t) => {
+                        const tPct = t.is_absent ? null : +((t.score_obtained / t.total_marks) * 100).toFixed(1)
+                        return (
+                          <tr key={t.id} className="hover:bg-amber-50 transition">
+                            <td className="px-5 py-3 text-gray-600 text-xs">{t.date}</td>
                             <td className="px-5 py-3">
-                              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${g.subject === 'Science' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>
-                                {g.subject}
+                              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${t.subject === 'Science' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>
+                                {t.subject}
                               </span>
                             </td>
-                            <td className="px-5 py-3 text-gray-700 max-w-xs truncate">
-                              {g.topic}
-                              {g.count > 1 && <span className="ml-1.5 text-xs text-gray-400">×{g.count}</span>}
-                            </td>
+                            <td className="px-5 py-3 text-gray-700 max-w-xs truncate">{t.topic_name}</td>
                             <td className="px-5 py-3 text-center font-medium text-gray-800">
-                              {g.marks > 0 ? g.scored : <span className="text-red-500 text-xs">Absent</span>}
+                              {t.is_absent ? <span className="text-red-500 text-xs">Absent</span> : t.score_obtained}
                             </td>
-                            <td className="px-5 py-3 text-center text-gray-500">{g.marks > 0 ? g.marks : '—'}</td>
+                            <td className="px-5 py-3 text-center text-gray-500">{t.is_absent ? '—' : t.total_marks}</td>
                             <td className="px-5 py-3 text-center">
-                              {g.pct !== null
-                                ? <span className={`font-bold text-sm ${g.pct >= 80 ? 'text-green-600' : g.pct >= 60 ? 'text-amber-600' : 'text-red-500'}`}>{g.pct}%</span>
+                              {tPct !== null
+                                ? <span className={`font-bold text-sm ${tPct >= 80 ? 'text-green-600' : tPct >= 60 ? 'text-amber-600' : 'text-red-500'}`}>{tPct}%</span>
                                 : '—'}
                             </td>
                             <td className="px-5 py-3 text-center hidden sm:table-cell">
-                              <DeltaBadge delta={g.trend} />
+                              <DeltaBadge delta={t.delta} />
                             </td>
                           </tr>
-                          {g.count > 1 && g.history.map((t) => {
-                            const tPct = t.is_absent ? null : +((t.score_obtained / t.total_marks) * 100).toFixed(1)
-                            return (
-                              <tr key={t.id} className="text-xs" style={{ background: 'rgba(200,134,10,0.04)' }}>
-                                <td className="px-5 py-2 text-gray-500 pl-8">{t.date}</td>
-                                <td className="px-5 py-2" />
-                                <td className="px-5 py-2 text-gray-500 pl-8">↳ individual test</td>
-                                <td className="px-5 py-2 text-center text-gray-700">
-                                  {t.is_absent ? <span className="text-red-500 text-xs">Absent</span> : t.score_obtained}
-                                </td>
-                                <td className="px-5 py-2 text-center text-gray-500">{t.is_absent ? '—' : t.total_marks}</td>
-                                <td className="px-5 py-2 text-center">
-                                  {tPct !== null
-                                    ? <span className={`font-semibold ${tPct >= 80 ? 'text-green-600' : tPct >= 60 ? 'text-amber-600' : 'text-red-500'}`}>{tPct}%</span>
-                                    : '—'}
-                                </td>
-                                <td className="px-5 py-2 text-center hidden sm:table-cell">
-                                  <DeltaBadge delta={t.delta} />
-                                </td>
-                              </tr>
-                            )
-                          })}
-                        </Fragment>
-                      ))}
+                        )
+                      })}
                     </tbody>
                   </table>
-                  {groupedScores.length === 0 && <p className="text-center text-gray-400 py-10 text-sm">No tests found.</p>}
+                  {allTestRows.length === 0 && <p className="text-center text-gray-400 py-10 text-sm">No tests found.</p>}
               </div>
             </>
           )}
