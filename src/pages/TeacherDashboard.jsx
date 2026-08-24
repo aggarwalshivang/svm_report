@@ -303,9 +303,11 @@ export default function TeacherDashboard() {
       return
     }
 
+    // token_hash (not token+email) is the pairing for a server-generated
+    // link's hashed_token — token+email is for the 6-digit code sent by
+    // email OTP, a different verification path; mixing them 403s.
     const { error: otpErr } = await supabase.auth.verifyOtp({
-      email: data.email,
-      token: data.token,
+      token_hash: data.token,
       type: 'magiclink',
     })
     if (otpErr) { alert(`Could not open ${student.student_name}'s dashboard: ${otpErr.message}`); return }
@@ -3649,15 +3651,20 @@ function StudentDetailModal({ student, scores, onClose, onViewAsStudent }) {
   const groupedScores = useMemo(() => {
     const rows = subjectFilter === 'All' ? scores : scores.filter((s) => s.subject === subjectFilter)
 
+    // Grouped by topic name alone — a handful of rows carry a mistagged
+    // subject (same topic logged once under the wrong subject), and keying
+    // on subject+topic left those as a separate, un-merged row.
     const map = {}
     rows.forEach((s) => {
-      const key = `${s.subject}::${normalizeTopicName(s.topic_name)}`
+      const key = normalizeTopicName(s.topic_name)
       if (!map[key]) {
-        map[key] = { key, subject: s.subject, topic: normalizeTopicName(s.topic_name), scored: 0, marks: 0, count: 0, latestDate: s.date, tests: [] }
+        map[key] = { key, topic: key, subjectCounts: {}, latestSubject: s.subject, scored: 0, marks: 0, count: 0, latestDate: s.date, tests: [], history: [] }
       }
       const g = map[key]
       g.count += 1
-      if (s.date > g.latestDate) g.latestDate = s.date
+      g.subjectCounts[s.subject] = (g.subjectCounts[s.subject] || 0) + 1
+      if (s.date >= g.latestDate) { g.latestDate = s.date; g.latestSubject = s.subject }
+      g.history.push(s)
       if (!s.is_absent) {
         g.scored += s.score_obtained
         g.marks  += s.total_marks
@@ -3666,6 +3673,11 @@ function StudentDetailModal({ student, scores, onClose, onViewAsStudent }) {
     })
 
     const groups = Object.values(map).map((g) => {
+      const entries = Object.entries(g.subjectCounts)
+      const maxCount = Math.max(...entries.map(([, c]) => c))
+      const tied = entries.filter(([, c]) => c === maxCount).map(([subj]) => subj)
+      const subject = tied.includes(g.latestSubject) ? g.latestSubject : tied[0]
+
       const pct = g.marks > 0 ? +((g.scored / g.marks) * 100).toFixed(1) : null
       const sortedTests = [...g.tests].sort((a, b) => a.date.localeCompare(b.date))
       let trend = null
@@ -3674,7 +3686,20 @@ function StudentDetailModal({ student, scores, onClose, onViewAsStudent }) {
         const lastPct  = (sortedTests[sortedTests.length - 1].score_obtained / sortedTests[sortedTests.length - 1].total_marks) * 100
         trend = +(lastPct - firstPct).toFixed(1)
       }
-      return { ...g, pct, trend }
+
+      // Individual attempts, newest first, each carrying its own delta vs
+      // the attempt immediately before it (chronologically) on this topic.
+      let prevPct = null
+      const historyChron = [...g.history].sort((a, b) => a.date.localeCompare(b.date)).map((s) => {
+        if (s.is_absent) return { ...s, delta: null }
+        const currPct = (s.score_obtained / s.total_marks) * 100
+        const delta = prevPct === null ? null : +(currPct - prevPct).toFixed(1)
+        prevPct = currPct
+        return { ...s, delta }
+      })
+      const history = historyChron.slice().reverse()
+
+      return { ...g, subject, pct, trend, history }
     })
 
     if (sortBy === 'date-asc')  groups.sort((a, b) => a.latestDate.localeCompare(b.latestDate))
@@ -3885,28 +3910,52 @@ function StudentDetailModal({ student, scores, onClose, onViewAsStudent }) {
                       </thead>
                       <tbody className="divide-y divide-amber-100">
                         {groupedScores.map((g) => (
-                          <tr key={g.key} className="bg-white hover:bg-amber-50 transition-colors">
-                            <td className="px-4 py-2.5 text-gray-500 text-xs">{g.latestDate}</td>
-                            <td className="px-4 py-2.5">
-                              <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${g.subject === 'Science' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>{g.subject}</span>
-                            </td>
-                            <td className="px-4 py-2.5 text-gray-700 max-w-[180px] truncate text-xs font-medium">
-                              {g.topic}
-                              {g.count > 1 && <span className="ml-1.5 text-gray-400">×{g.count}</span>}
-                            </td>
-                            <td className="px-4 py-2.5 text-center font-semibold text-gray-800 text-sm">
-                              {g.marks > 0 ? g.scored : <span className="text-red-400 text-xs font-medium">Absent</span>}
-                            </td>
-                            <td className="px-4 py-2.5 text-center text-gray-500 text-sm">{g.marks > 0 ? g.marks : '—'}</td>
-                            <td className="px-4 py-2.5 text-center">
-                              {g.pct !== null
-                                ? <span className={`font-bold text-sm ${g.pct >= 80 ? 'text-green-600' : g.pct >= 60 ? 'text-amber-600' : 'text-red-500'}`}>{g.pct}%</span>
-                                : <span className="text-gray-300">—</span>}
-                            </td>
-                            <td className="px-4 py-2.5 text-center hidden sm:table-cell">
-                              <DeltaBadge delta={g.trend} />
-                            </td>
-                          </tr>
+                          <Fragment key={g.key}>
+                            <tr className="bg-white hover:bg-amber-50 transition-colors">
+                              <td className="px-4 py-2.5 text-gray-500 text-xs">{g.latestDate}</td>
+                              <td className="px-4 py-2.5">
+                                <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${g.subject === 'Science' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>{g.subject}</span>
+                              </td>
+                              <td className="px-4 py-2.5 text-gray-700 max-w-[180px] truncate text-xs font-medium">
+                                {g.topic}
+                                {g.count > 1 && <span className="ml-1.5 text-gray-400">×{g.count}</span>}
+                              </td>
+                              <td className="px-4 py-2.5 text-center font-semibold text-gray-800 text-sm">
+                                {g.marks > 0 ? g.scored : <span className="text-red-400 text-xs font-medium">Absent</span>}
+                              </td>
+                              <td className="px-4 py-2.5 text-center text-gray-500 text-sm">{g.marks > 0 ? g.marks : '—'}</td>
+                              <td className="px-4 py-2.5 text-center">
+                                {g.pct !== null
+                                  ? <span className={`font-bold text-sm ${g.pct >= 80 ? 'text-green-600' : g.pct >= 60 ? 'text-amber-600' : 'text-red-500'}`}>{g.pct}%</span>
+                                  : <span className="text-gray-300">—</span>}
+                              </td>
+                              <td className="px-4 py-2.5 text-center hidden sm:table-cell">
+                                <DeltaBadge delta={g.trend} />
+                              </td>
+                            </tr>
+                            {g.count > 1 && g.history.map((t) => {
+                              const tPct = t.is_absent ? null : +((t.score_obtained / t.total_marks) * 100).toFixed(1)
+                              return (
+                                <tr key={t.id} className="text-xs" style={{ background: 'rgba(200,134,10,0.04)' }}>
+                                  <td className="px-4 py-2 text-gray-500 pl-8">{t.date}</td>
+                                  <td className="px-4 py-2" />
+                                  <td className="px-4 py-2 text-gray-500 pl-8">↳ individual test</td>
+                                  <td className="px-4 py-2 text-center text-gray-700">
+                                    {t.is_absent ? <span className="text-red-400 text-xs font-medium">Absent</span> : t.score_obtained}
+                                  </td>
+                                  <td className="px-4 py-2 text-center text-gray-500">{t.is_absent ? '—' : t.total_marks}</td>
+                                  <td className="px-4 py-2 text-center">
+                                    {tPct !== null
+                                      ? <span className={`font-semibold ${tPct >= 80 ? 'text-green-600' : tPct >= 60 ? 'text-amber-600' : 'text-red-500'}`}>{tPct}%</span>
+                                      : <span className="text-gray-300">—</span>}
+                                  </td>
+                                  <td className="px-4 py-2 text-center hidden sm:table-cell">
+                                    <DeltaBadge delta={t.delta} />
+                                  </td>
+                                </tr>
+                              )
+                            })}
+                          </Fragment>
                         ))}
                       </tbody>
                     </table>
