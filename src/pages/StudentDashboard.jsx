@@ -101,6 +101,7 @@ export default function StudentDashboard() {
   const [classRank, setClassRank] = useState(null)
   const [classSize, setClassSize] = useState(null)
   const [classRankTrend, setClassRankTrend] = useState(null)
+  const [classRankAbove, setClassRankAbove] = useState([])
   const [assignments, setAssignments] = useState([])
   const [submissions, setSubmissions] = useState([]) // this student's assignment_submissions rows
   const [worksheetFeedback, setWorksheetFeedback] = useState([]) // this student's worksheet_feedback rows
@@ -149,6 +150,7 @@ export default function StudentDashboard() {
       setClassRank(data.rank ?? null)
       setClassSize(data.class_size ?? null)
       setClassRankTrend(data.trend ?? null)
+      setClassRankAbove(data.above ?? [])
     }
     computeRank()
   }, [session?.studentId, session?.class])
@@ -512,18 +514,22 @@ export default function StudentDashboard() {
         {section === 'report' && (
         <>
         {/* ── SUMMARY ROW ── */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
           <StatCard label="Total Tests"  value={scores.length}     sub={`${appeared.length} appeared`} type="gold" />
           <StatCard label="Overall Avg"  value={`${avgPct}%`}      sub={avgPct >= 75 ? 'Great work!' : avgPct >= 60 ? 'Keep going' : 'Needs effort'} type="green" />
           <StatCard label="Absences"     value={absentCount}        sub={absentCount === 0 ? 'Perfect attendance' : 'tests missed'} type="red" />
           <StatCard label="Best Subject" value={bestSubject}        sub={bestSubject === 'Science' ? `${sciAvg}% avg` : `${mathAvg}% avg`} type="brown" />
-          <StatCard
-            label="Class Rank"
-            value={classRank != null ? `#${classRank}` : classSize !== null ? '—' : '…'}
-            sub={classSize !== null ? `out of ${classSize} in Class ${session?.class}` : 'Computing…'}
-            trend={classRank != null ? classRankTrend : null}
-            type="rank"
-          />
+          <div className="col-span-2 sm:col-span-3 md:col-span-2 flex gap-2">
+            <StatCard
+              label="Class Rank"
+              value={classRank != null ? `#${classRank}` : classSize !== null ? '—' : '…'}
+              sub={classSize !== null ? `out of ${classSize} in Class ${session?.class}` : 'Computing…'}
+              trend={classRank != null ? classRankTrend : null}
+              type="rank"
+              className="flex-1"
+            />
+            <RankAheadPanel above={classRankAbove} />
+          </div>
         </div>
 
         {/* ── CHARTS + RECENT TESTS ── */}
@@ -1385,7 +1391,7 @@ const RANK_TREND_LABEL = {
   stable:    { text: '→ Stable',    color: '#c8860a' },
 }
 
-function StatCard({ label, value, sub, trend, type }) {
+function StatCard({ label, value, sub, trend, type, className = '' }) {
   const styles = {
     gold:  { accent: '#c8860a',  subColor: '#6b7280' },
     green: { accent: '#22c55e',  subColor: '#6b7280' },
@@ -1396,13 +1402,35 @@ function StatCard({ label, value, sub, trend, type }) {
   const s = styles[type]
   const trendInfo = trend ? RANK_TREND_LABEL[trend] : null
   return (
-    <div className="bg-white rounded-xl overflow-hidden shadow-sm border border-gray-100">
+    <div className={`bg-white rounded-xl overflow-hidden shadow-sm border border-gray-100 ${className}`}>
       <div className="h-1 w-full" style={{ background: s.accent }} />
       <div className="px-5 py-4">
         <p className="text-[11px] font-semibold uppercase tracking-wider mb-1.5 text-gray-400">{label}</p>
-        <p className="text-2xl font-bold leading-tight text-gray-800">{value}</p>
+        <p className="text-2xl font-bold leading-tight text-gray-800 flex items-center gap-2">
+          {value}
+          {trendInfo && <span className="text-xs font-bold" style={{ color: trendInfo.color }}>{trendInfo.text}</span>}
+        </p>
         {sub && <p className="text-xs mt-1.5 text-gray-500">{sub}</p>}
-        {trendInfo && <p className="text-xs mt-1 font-bold" style={{ color: trendInfo.color }}>{trendInfo.text}</p>}
+      </div>
+    </div>
+  )
+}
+
+// Shows only rank position + percentage for classmates ranked above the
+// caller — never names/student_id, since get_my_class_rank() (see
+// scripts/add-rank-above-to-rpc.sql) only ever returns anonymized data for
+// other students.
+function RankAheadPanel({ above }) {
+  if (!above || above.length === 0) return null
+  return (
+    <div className="bg-white rounded-xl overflow-hidden shadow-sm border border-gray-100 w-24 sm:w-28 shrink-0 px-2.5 py-2 flex flex-col justify-center">
+      <p className="text-[9px] font-semibold uppercase tracking-wider mb-1 text-gray-400">Ahead of you</p>
+      <div className="flex flex-col gap-0.5">
+        {above.map((a) => (
+          <p key={a.rank} className="text-[11px] leading-tight text-gray-600">
+            <span className="font-bold" style={{ color: '#c8860a' }}>#{a.rank}</span> · {a.pct}%
+          </p>
+        ))}
       </div>
     </div>
   )
