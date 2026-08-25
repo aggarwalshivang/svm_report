@@ -3710,6 +3710,20 @@ function StudentDetailModal({ student, scores, onClose, onViewAsStudent }) {
     return groups
   }, [scores, subjectFilter, sortBy])
 
+  // Every individual test as its own row (no topic grouping/nesting) — each
+  // still carries the delta vs. the previous attempt on the same topic,
+  // computed above in groupedScores.
+  const allTestRows = useMemo(() => {
+    const rows = groupedScores.flatMap((g) => g.history)
+    const pctOf = (t) => (t.is_absent ? -1 : (t.score_obtained / t.total_marks) * 100)
+    if (sortBy === 'date-asc')  rows.sort((a, b) => a.date.localeCompare(b.date))
+    if (sortBy === 'date-desc') rows.sort((a, b) => b.date.localeCompare(a.date))
+    if (sortBy === 'pct-asc')   rows.sort((a, b) => pctOf(a) - pctOf(b))
+    if (sortBy === 'pct-desc')  rows.sort((a, b) => pctOf(b) - pctOf(a))
+    if (sortBy === 'subject')   rows.sort((a, b) => a.subject.localeCompare(b.subject))
+    return rows
+  }, [groupedScores, sortBy])
+
   const chartData = appeared
     .slice().sort((a, b) => a.date.localeCompare(b.date))
     .map((s) => ({ date: s.date.slice(5), pct: +((s.score_obtained / s.total_marks) * 100).toFixed(1) }))
@@ -3909,54 +3923,30 @@ function StudentDetailModal({ student, scores, onClose, onViewAsStudent }) {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-amber-100">
-                        {groupedScores.map((g) => (
-                          <Fragment key={g.key}>
-                            <tr className="bg-white hover:bg-amber-50 transition-colors">
-                              <td className="px-4 py-2.5 text-gray-500 text-xs">{g.latestDate}</td>
+                        {allTestRows.map((t) => {
+                          const tPct = t.is_absent ? null : +((t.score_obtained / t.total_marks) * 100).toFixed(1)
+                          return (
+                            <tr key={t.id} className="bg-white hover:bg-amber-50 transition-colors">
+                              <td className="px-4 py-2.5 text-gray-500 text-xs">{t.date}</td>
                               <td className="px-4 py-2.5">
-                                <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${g.subject === 'Science' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>{g.subject}</span>
+                                <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${t.subject === 'Science' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>{t.subject}</span>
                               </td>
-                              <td className="px-4 py-2.5 text-gray-700 max-w-[180px] truncate text-xs font-medium">
-                                {g.topic}
-                                {g.count > 1 && <span className="ml-1.5 text-gray-400">×{g.count}</span>}
-                              </td>
+                              <td className="px-4 py-2.5 text-gray-700 max-w-[180px] truncate text-xs font-medium">{t.topic_name}</td>
                               <td className="px-4 py-2.5 text-center font-semibold text-gray-800 text-sm">
-                                {g.marks > 0 ? g.scored : <span className="text-red-400 text-xs font-medium">Absent</span>}
+                                {t.is_absent ? <span className="text-red-400 text-xs font-medium">Absent</span> : t.score_obtained}
                               </td>
-                              <td className="px-4 py-2.5 text-center text-gray-500 text-sm">{g.marks > 0 ? g.marks : '—'}</td>
+                              <td className="px-4 py-2.5 text-center text-gray-500 text-sm">{t.is_absent ? '—' : t.total_marks}</td>
                               <td className="px-4 py-2.5 text-center">
-                                {g.pct !== null
-                                  ? <span className={`font-bold text-sm ${g.pct >= 80 ? 'text-green-600' : g.pct >= 60 ? 'text-amber-600' : 'text-red-500'}`}>{g.pct}%</span>
+                                {tPct !== null
+                                  ? <span className={`font-bold text-sm ${tPct >= 80 ? 'text-green-600' : tPct >= 60 ? 'text-amber-600' : 'text-red-500'}`}>{tPct}%</span>
                                   : <span className="text-gray-300">—</span>}
                               </td>
                               <td className="px-4 py-2.5 text-center hidden sm:table-cell">
-                                <DeltaBadge delta={g.trend} />
+                                <DeltaBadge delta={t.delta} />
                               </td>
                             </tr>
-                            {g.count > 1 && g.history.map((t) => {
-                              const tPct = t.is_absent ? null : +((t.score_obtained / t.total_marks) * 100).toFixed(1)
-                              return (
-                                <tr key={t.id} className="text-xs" style={{ background: 'rgba(200,134,10,0.04)' }}>
-                                  <td className="px-4 py-2 text-gray-500 pl-8">{t.date}</td>
-                                  <td className="px-4 py-2" />
-                                  <td className="px-4 py-2 text-gray-500 pl-8">↳ {t.topic_name}</td>
-                                  <td className="px-4 py-2 text-center text-gray-700">
-                                    {t.is_absent ? <span className="text-red-400 text-xs font-medium">Absent</span> : t.score_obtained}
-                                  </td>
-                                  <td className="px-4 py-2 text-center text-gray-500">{t.is_absent ? '—' : t.total_marks}</td>
-                                  <td className="px-4 py-2 text-center">
-                                    {tPct !== null
-                                      ? <span className={`font-semibold ${tPct >= 80 ? 'text-green-600' : tPct >= 60 ? 'text-amber-600' : 'text-red-500'}`}>{tPct}%</span>
-                                      : <span className="text-gray-300">—</span>}
-                                  </td>
-                                  <td className="px-4 py-2 text-center hidden sm:table-cell">
-                                    <DeltaBadge delta={t.delta} />
-                                  </td>
-                                </tr>
-                              )
-                            })}
-                          </Fragment>
-                        ))}
+                          )
+                        })}
                       </tbody>
                     </table>
                 </div>

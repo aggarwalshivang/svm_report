@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { REPORT_TOPICS, MIN_PERCENTAGE_OPTIONS } from '../../constants/reportTopics'
 import { checkDuplicateTest, buildAndDownloadReportCsvs, insertScoreRows, sendReportEmail } from '../../lib/reportSubmit'
+import { applyMarksRules } from '../../lib/updateReport'
 import { GOLD, NAV, inputClass, focusGold, blurGold } from './formStyles'
 import RecipientField from './RecipientField'
 
@@ -76,7 +77,7 @@ export default function AddExamsSheet({ studentList, onInserted, teacherEmail })
           topic_name: topic,
           total_marks: Number(totalMarks),
           date: examDate,
-          score_obtained: isAbsent ? 0 : Number(entry.score),
+          score_obtained: isAbsent ? 0 : applyMarksRules(Number(entry.score), totalMarks, minPercentage),
           is_absent: isAbsent,
         }
       })

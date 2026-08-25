@@ -165,7 +165,7 @@ export default function UpdateReport({ studentList, onInserted, teacherEmail }) 
 
       const { rows, unmatchedCsvNames } = matchAndBuildRows({
         roster: studentList, csvRows: resolvedCsvRows, classNum, subject, topicName: topic,
-        totalMarks: effectiveTotalMarks, examDate, excludeRowIndexes,
+        totalMarks: effectiveTotalMarks, minPercentage: Number(minPercentage), examDate, excludeRowIndexes,
       })
       if (!rows.length) throw new Error(`No Class ${classNum} students found in the roster.`)
 

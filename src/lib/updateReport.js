@@ -74,6 +74,18 @@ export function computeTotalMarksFromCsv(csvRows) {
   return fallback ? fallback.totalScore : null
 }
 
+// Total Marks caps a present student's raw score at the exam's (possibly
+// just-lowered) max, and Min Percentage then floors the result back up so
+// no present student is recorded below the pass threshold. Both are
+// applied directly to score_obtained before it's written to
+// student_scores — this is real grade data, not just report-email metadata.
+export function applyMarksRules(rawScore, totalMarks, minPercentage) {
+  if (!Number.isFinite(rawScore)) return 0
+  const capped = Math.min(rawScore, Number(totalMarks))
+  const floor = Math.round((Number(minPercentage) / 100) * Number(totalMarks))
+  return Math.max(capped, floor)
+}
+
 // Matches every roster student against the CSV by name (trimmed,
 // case/whitespace-insensitive) — one join key used for scoring, absentee
 // rows, and both report CSVs, unlike the original n8n flow which matched by
@@ -85,7 +97,7 @@ export function computeTotalMarksFromCsv(csvRows) {
 // never be treated as a name match — used for shared-device rows the
 // teacher hasn't manually resolved yet, so a device's own registered name
 // can never accidentally auto-match a same-named roster student.
-export function matchAndBuildRows({ roster, csvRows, classNum, subject, topicName, totalMarks, examDate, excludeRowIndexes }) {
+export function matchAndBuildRows({ roster, csvRows, classNum, subject, topicName, totalMarks, minPercentage, examDate, excludeRowIndexes }) {
   const classRoster = roster.filter((s) => Number(s.class) === Number(classNum))
   const excluded = excludeRowIndexes ?? new Set()
 
@@ -110,11 +122,7 @@ export function matchAndBuildRows({ roster, csvRows, classNum, subject, topicNam
     }
     if (csvRow) {
       matchedRowIndexes.add(csvRow.rowIndex)
-      const obtained = csvRow.score
-      const originalTotal = csvRow.totalScore
-      const scoreObtained = Number.isFinite(obtained) && Number.isFinite(originalTotal) && originalTotal > 0
-        ? Math.round((obtained / originalTotal) * Number(totalMarks))
-        : 0
+      const scoreObtained = applyMarksRules(csvRow.score, totalMarks, minPercentage)
       const rowDate = parseCsvDateToInputValue(csvRow.submittedOn) || examDate
       return { ...base, date: rowDate, score_obtained: scoreObtained, is_absent: false }
     }
