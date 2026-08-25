@@ -87,6 +87,27 @@ input, textarea, select {
 }
 input::placeholder, textarea::placeholder { color: var(--fainter) !important; }
 
+/* The number input's spin-button widget is a separate UA-rendered element
+   with its own default white background — it doesn't pick up the input's
+   background-color, so it needs to be targeted directly. */
+input[type='number']::-webkit-inner-spin-button,
+input[type='number']::-webkit-outer-spin-button {
+  background-color: transparent;
+  opacity: 0.7;
+}
+input[type='number']::-webkit-inner-spin-button:hover,
+input[type='number']::-webkit-outer-spin-button:hover {
+  opacity: 1;
+}
+
+/* The dropdown popup a <select> opens is drawn by the OS/browser, not by the
+   app's theme — it always renders on a plain light background regardless of
+   --input-bg, so option rows need their own fixed, readable colors here. */
+select option {
+  color: #2d1200 !important;
+  background-color: #fffaf3 !important;
+}
+
 /* ── Thin gold scrollbar for table containers ── */
 .table-scroll {
   scrollbar-width: thin;
