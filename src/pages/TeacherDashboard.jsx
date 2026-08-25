@@ -145,6 +145,8 @@ export default function TeacherDashboard() {
   const [loading, setLoading] = useState(true)
   const [classFilter, setClassFilter] = useState('All')
   const [search, setSearch] = useState('')
+  const [notSubmittingSort, setNotSubmittingSort] = useState('count-desc') // 'count-desc' | 'count-asc' | 'name-asc' | 'name-desc'
+  const [notSubmittingMinCount, setNotSubmittingMinCount] = useState('')
   const [selected, setSelected] = useState(null)
   const [view, setView] = useState('students') // 'students' | 'tests'
   const [sending, setSending] = useState(null)
@@ -564,6 +566,31 @@ export default function TeacherDashboard() {
     () => Object.fromEntries(assignmentAnalysis.perAssignment.map((p) => [p.assignment.id, p])),
     [assignmentAnalysis]
   )
+
+  // Tallies each student's missing count across every worksheet posted for
+  // their own class (assignmentAnalysis already scopes `missing` per-class),
+  // so a student never gets dinged for worksheets that were never theirs.
+  const notSubmittingCounts = useMemo(() => {
+    const counts = new Map()
+    assignmentAnalysis.perAssignment.forEach((p) => {
+      p.missing.forEach((s) => {
+        const cur = counts.get(s.student_id) || { student: s, count: 0 }
+        cur.count += 1
+        counts.set(s.student_id, cur)
+      })
+    })
+    const minCount = notSubmittingMinCount === '' ? 0 : Number(notSubmittingMinCount)
+    return [...counts.values()]
+      .filter(({ student }) => classFilter === 'All' || String(student.class) === classFilter)
+      .filter(({ student }) => !search || student.student_name.toLowerCase().includes(search.toLowerCase()))
+      .filter(({ count }) => count >= minCount)
+      .sort((a, b) => {
+        if (notSubmittingSort === 'name-asc')  return a.student.student_name.localeCompare(b.student.student_name)
+        if (notSubmittingSort === 'name-desc') return b.student.student_name.localeCompare(a.student.student_name)
+        if (notSubmittingSort === 'count-asc') return a.count - b.count || a.student.student_name.localeCompare(b.student.student_name)
+        return b.count - a.count || a.student.student_name.localeCompare(b.student.student_name)
+      })
+  }, [assignmentAnalysis, classFilter, search, notSubmittingMinCount, notSubmittingSort])
 
   // Worksheet performance analysis — derived by text-mining assignment_feedback
   // (worksheets carry no marks/chapter tag of their own). Built on top of the
@@ -1202,6 +1229,7 @@ export default function TeacherDashboard() {
                 { k: 'updateReport', label: 'Add Test', icon: '📝' },
                 { k: 'assignments', label: 'Worksheets', icon: '📌' },
                 { k: 'worksheetInsights', label: 'Worksheet Performance', icon: '📈' },
+                { k: 'notSubmitting', label: 'Frequent Non-Submitters', icon: '⚠️' },
                 { k: 'manage',   label: 'Other',    icon: '⚙️' },
               ].map(({ k, label, icon }) => (
                 <button
@@ -1274,7 +1302,7 @@ export default function TeacherDashboard() {
                   ))}
                 </div>
               )}
-              {(view === 'students' || view === 'manage' || view === 'assignments') && (
+              {(view === 'students' || view === 'manage' || view === 'assignments' || view === 'notSubmitting') && (
                 <input
                   type="text"
                   placeholder={view === 'assignments' ? 'Search worksheet…' : 'Search student…'}
@@ -1284,6 +1312,36 @@ export default function TeacherDashboard() {
                   onFocus={(e) => e.target.style.boxShadow = `0 0 0 2px ${GOLD}40`}
                   onBlur={(e) => e.target.style.boxShadow = ''}
                 />
+              )}
+              {view === 'notSubmitting' && (
+                <>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-semibold text-gray-400">Min unsubmitted</span>
+                    <input
+                      type="number"
+                      min="0"
+                      placeholder="Any"
+                      value={notSubmittingMinCount}
+                      onChange={(e) => setNotSubmittingMinCount(e.target.value)}
+                      className="border border-gray-200 rounded-lg px-2.5 py-2 text-xs font-medium bg-gray-50 focus:outline-none w-20"
+                      style={{ color: 'var(--text)' }}
+                    />
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-semibold text-gray-400">Sort by</span>
+                    <select
+                      value={notSubmittingSort}
+                      onChange={(e) => setNotSubmittingSort(e.target.value)}
+                      className="border border-gray-200 rounded-lg px-2.5 py-2 text-xs font-medium bg-gray-50 focus:outline-none"
+                      style={{ color: 'var(--text)' }}
+                    >
+                      <option value="count-desc">Unsubmitted (High → Low)</option>
+                      <option value="count-asc">Unsubmitted (Low → High)</option>
+                      <option value="name-asc">Name (A → Z)</option>
+                      <option value="name-desc">Name (Z → A)</option>
+                    </select>
+                  </div>
+                </>
               )}
               {view === 'tests' && (
                 <>
@@ -1325,7 +1383,7 @@ export default function TeacherDashboard() {
                 </>
               )}
               <span className="text-sm text-gray-400 ml-auto">
-                {view === 'students' ? `${filtered.length} students` : view === 'tests' ? `${filteredTests.length} tests` : view === 'manage' ? `${studentList.length} students` : view === 'assignments' ? `${filteredAssignments.length} worksheets` : ''}
+                {view === 'students' ? `${filtered.length} students` : view === 'tests' ? `${filteredTests.length} tests` : view === 'manage' ? `${studentList.length} students` : view === 'assignments' ? `${filteredAssignments.length} worksheets` : view === 'notSubmitting' ? `${notSubmittingCounts.length} students` : ''}
               </span>
             </div>
             )}
@@ -2255,6 +2313,51 @@ function ini(name) {
                 )}
               </div>
             </div>
+          </div>
+        )}
+
+        {/* ── Frequent Non-Submitters tab ── */}
+        {view === 'notSubmitting' && (
+          <div className="bg-white rounded-xl shadow overflow-hidden">
+            <div className="px-5 py-3 border-b" style={{ background: 'rgba(239,68,68,0.12)' }}>
+              <p className="text-sm font-semibold" style={{ color: '#dc2626' }}>
+                ⚠️ Students by Unsubmitted Worksheets ({notSubmittingCounts.length})
+              </p>
+              <p className="text-xs text-gray-400 mt-0.5">Counted only against worksheets posted for that student's own class, sorted highest to lowest.</p>
+            </div>
+            {notSubmittingCounts.length === 0 ? (
+              <p className="text-sm text-gray-400 py-10 text-center">Everyone's caught up 🎉</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs uppercase tracking-wide" style={{ background: NAV, color: 'var(--faint)' }}>
+                      <th className="px-3 sm:px-5 py-3 w-12">#</th>
+                      <th className="px-3 sm:px-5 py-3">Student</th>
+                      <th className="px-3 sm:px-5 py-3 w-24">Class</th>
+                      <th className="px-3 sm:px-5 py-3 text-center w-56">Unsubmitted Worksheets</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {notSubmittingCounts.map(({ student, count }, i) => (
+                      <tr key={student.student_id}>
+                        <td className="px-3 sm:px-5 py-3 text-gray-400">{i + 1}</td>
+                        <td className="px-3 sm:px-5 py-3 font-medium text-gray-800">{student.student_name}</td>
+                        <td className="px-3 sm:px-5 py-3 text-gray-500">Class {student.class}</td>
+                        <td className="px-3 sm:px-5 py-3 text-center">
+                          <span
+                            className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1 rounded-full"
+                            style={{ background: 'rgba(239,68,68,0.12)', color: '#dc2626', border: '1px solid rgba(239,68,68,0.25)' }}
+                          >
+                            {count}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
 
