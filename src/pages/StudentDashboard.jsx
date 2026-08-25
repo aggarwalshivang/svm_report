@@ -95,6 +95,7 @@ export default function StudentDashboard() {
 
   const [scores, setScores] = useState([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [tab, setTab] = useState('all')
   const [subjectFilter, setSubjectFilter] = useState('All')
   const [sortBy, setSortBy] = useState('date-desc') // date-asc | date-desc | pct-asc | pct-desc | subject
@@ -123,11 +124,16 @@ export default function StudentDashboard() {
         .maybeSingle()
       const cutoff = profile?.report_start_date ?? null
 
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('student_scores')
         .select('*')
         .eq('student_id', session.studentId)
         .order('date', { ascending: true })
+
+      // A stale/expired session fails silently here (RLS just returns no
+      // rows on a bad token, same as if there were genuinely no scores) —
+      // surface it instead of rendering a dashboard that just looks empty.
+      if (error) { console.error('Failed to load scores:', error); setLoadError(true) }
 
       const rows = (cutoff ? (data || []).filter((s) => s.date >= cutoff) : (data || []))
         .map((s) => ({ ...s, subject: normalizeSubject(s.subject) }))
@@ -146,6 +152,7 @@ export default function StudentDashboard() {
       // (see scripts/create-class-rank-rpc.sql) that returns just the
       // caller's own rank + class size, never other students' data.
       const { data, error } = await supabase.rpc('get_my_class_rank').maybeSingle()
+      if (error) { console.error('Failed to load class rank:', error); setLoadError(true) }
       if (error || !data) return
       setClassRank(data.rank ?? null)
       setClassSize(data.class_size ?? null)
@@ -292,6 +299,7 @@ export default function StudentDashboard() {
   }, [assignmentsWithStatus, assignmentFilter, assignmentSubjectFilter, assignmentSearch, assignmentSort])
 
   function logout() {
+    supabase.auth.signOut()
     localStorage.removeItem('svm_session')
     navigate('/')
   }
@@ -489,6 +497,13 @@ export default function StudentDashboard() {
           </button>
         </div>
       </nav>
+
+      {loadError && (
+        <div className="px-5 py-2.5 flex items-center justify-between gap-3 text-xs sm:text-sm font-semibold" style={{ background: '#dc2626', color: 'white' }}>
+          <span>⚠️ Couldn't load your data — your session may have expired. Try logging out and back in.</span>
+          <button onClick={logout} className="underline flex-shrink-0">Logout</button>
+        </div>
+      )}
 
       {impersonating && (
         <div className="px-5 py-2 flex items-center justify-between gap-3 text-xs sm:text-sm font-semibold" style={{ background: '#c8860a', color: 'white' }}>
