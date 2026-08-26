@@ -2320,11 +2320,15 @@ function ini(name) {
                                               {feedback ? '✅ Graded' : '⏳ Pending grading'}
                                             </span>
                                             <label
-                                              className="cursor-pointer font-semibold leading-none"
-                                              style={{ color: isUploading ? '#dc2626' : GOLD, opacity: isUploading ? 0.6 : 1 }}
-                                              title="Resubmit this student's worksheet PDF on their behalf"
+                                              className="cursor-pointer font-semibold leading-none text-[10px] px-2 py-1 rounded-full whitespace-nowrap"
+                                              style={{
+                                                color: isUploading ? '#9ca3af' : GOLD,
+                                                background: isUploading ? 'rgba(156,163,175,0.12)' : 'rgba(200,134,10,0.1)',
+                                                border: `1px solid ${isUploading ? 'rgba(156,163,175,0.25)' : 'rgba(200,134,10,0.3)'}`,
+                                              }}
+                                              title="Upload a new worksheet PDF for this student, replacing their current submission and re-grading it"
                                             >
-                                              {isUploading ? '⏳' : '♻️'}
+                                              {isUploading ? '⏳ Uploading…' : '🔁 Resubmit'}
                                               <input
                                                 type="file"
                                                 accept="application/pdf"
