@@ -942,7 +942,12 @@ export default function TeacherDashboard() {
   // paper copy handed in physically, or a student without upload access) —
   // goes through the exact same submit-worksheet Edge Function/n8n grading
   // path as the student's own upload, just triggered from the teacher side.
-  async function uploadWorksheetForStudent(assignment, student, file) {
+  // `isResubmit` covers the case where the student already has a submission
+  // (e.g. a wrong file, or the teacher wants a redo): the Edge Function
+  // upserts on (assignment_id, student_id) either way, so this just decides
+  // how the local state gets patched afterwards — a resubmission replaces
+  // the existing row instead of incrementing the submitted/missing counts.
+  async function uploadWorksheetForStudent(assignment, student, file, isResubmit = false) {
     const key = `${assignment.id}:${student.student_id}`
     if (file.type !== 'application/pdf') {
       setUploadErrorByKey((prev) => ({ ...prev, [key]: 'Only PDF files are accepted.' }))
@@ -972,19 +977,45 @@ export default function TeacherDashboard() {
 
     if (!fnErr && data?.ok !== false) {
       const submitted_at = new Date().toISOString()
-      setAssignmentSubmissions((prev) => [
-        ...prev,
-        { assignment_id: assignment.id, student_id: student.student_id, student_name: student.student_name, file_name: file.name, submitted_at },
-      ])
-      setWorksheetReport((prev) => prev.map((a) => (a.id === assignment.id
-        ? {
-            ...a,
-            submitted_count: a.submitted_count + 1,
-            missing_count: Math.max(a.missing_count - 1, 0),
-            submitted_pct: a.total_students ? Math.round((1000 * (a.submitted_count + 1)) / a.total_students) / 10 : 0,
-          }
-        : a
-      )))
+      if (isResubmit) {
+        // The row already existed (upserted server-side) — patch it in
+        // place, and re-fetch the graded feedback since the AI's new
+        // commentary for the resubmission isn't returned in this response.
+        setAssignmentSubmissions((prev) => prev.map((s) => (
+          s.assignment_id === assignment.id && s.student_id === student.student_id
+            ? { ...s, file_name: file.name, submitted_at }
+            : s
+        )))
+        const { data: freshFeedback } = await supabase
+          .from('worksheet_feedback')
+          .select('*')
+          .eq('assignment_id', assignment.id)
+          .eq('student_id', student.student_id)
+          .maybeSingle()
+        if (freshFeedback) {
+          setWorksheetFeedback((prev) => {
+            const idx = prev.findIndex((f) => f.assignment_id === assignment.id && f.student_id === student.student_id)
+            if (idx === -1) return [...prev, freshFeedback]
+            const next = [...prev]
+            next[idx] = freshFeedback
+            return next
+          })
+        }
+      } else {
+        setAssignmentSubmissions((prev) => [
+          ...prev,
+          { assignment_id: assignment.id, student_id: student.student_id, student_name: student.student_name, file_name: file.name, submitted_at },
+        ])
+        setWorksheetReport((prev) => prev.map((a) => (a.id === assignment.id
+          ? {
+              ...a,
+              submitted_count: a.submitted_count + 1,
+              missing_count: Math.max(a.missing_count - 1, 0),
+              submitted_pct: a.total_students ? Math.round((1000 * (a.submitted_count + 1)) / a.total_students) / 10 : 0,
+            }
+          : a
+        )))
+      }
       setUploadingForKey(null)
       return
     }
@@ -2276,13 +2307,37 @@ function ini(name) {
                                     Grading: {p.gradedCount}/{p.submittedWithFeedback.length} graded
                                   </p>
                                   <div className="space-y-2">
-                                    {p.submittedWithFeedback.map(({ student, feedback }) => (
+                                    {p.submittedWithFeedback.map(({ student, feedback }) => {
+                                      const uploadKey = `${a.id}:${student.student_id}`
+                                      const isUploading = uploadingForKey === uploadKey
+                                      const uploadError = uploadErrorByKey[uploadKey]
+                                      return (
                                       <div key={student.student_id} className="text-xs border border-gray-100 rounded-lg px-2.5 py-2 bg-white">
                                         <div className="flex items-center justify-between gap-2">
                                           <span className="font-medium text-gray-700">{student.student_name}</span>
-                                          <span className={feedback ? 'text-green-600 flex-shrink-0' : 'text-gray-400 flex-shrink-0'}>
-                                            {feedback ? '✅ Graded' : '⏳ Pending grading'}
-                                          </span>
+                                          <div className="flex items-center gap-2 flex-shrink-0">
+                                            <span className={feedback ? 'text-green-600' : 'text-gray-400'}>
+                                              {feedback ? '✅ Graded' : '⏳ Pending grading'}
+                                            </span>
+                                            <label
+                                              className="cursor-pointer font-semibold leading-none"
+                                              style={{ color: isUploading ? '#dc2626' : GOLD, opacity: isUploading ? 0.6 : 1 }}
+                                              title="Resubmit this student's worksheet PDF on their behalf"
+                                            >
+                                              {isUploading ? '⏳' : '♻️'}
+                                              <input
+                                                type="file"
+                                                accept="application/pdf"
+                                                className="hidden"
+                                                disabled={isUploading}
+                                                onChange={(e) => {
+                                                  const file = e.target.files?.[0]
+                                                  e.target.value = ''
+                                                  if (file) uploadWorksheetForStudent(a, student, file, true)
+                                                }}
+                                              />
+                                            </label>
+                                          </div>
                                         </div>
                                         {feedback && (feedback.handwriting_feedback || feedback.assignment_feedback) && (
                                           <div className="mt-1 space-y-1 text-gray-500">
@@ -2294,8 +2349,10 @@ function ini(name) {
                                             )}
                                           </div>
                                         )}
+                                        {uploadError && <p className="mt-1 text-[10px] text-red-500">{uploadError}</p>}
                                       </div>
-                                    ))}
+                                      )
+                                    })}
                                   </div>
                                 </div>
                               )}

@@ -1200,14 +1200,24 @@ function AssignmentCard({ a, session, onSubmitted }) {
     setFile(f)
   }
 
+  // Swallows its own failures (rather than throwing) — this runs inside the
+  // dropped-connection poll loop below, and a flaky connection that killed
+  // the original upload can just as easily kill this recheck. Letting that
+  // throw out of submit() uncaught used to leave the button stuck on
+  // "Checking…" forever (uploading/verifying never got reset, and there was
+  // no surrounding try/catch), with no way to recover short of a page reload.
   async function checkSubmitted(startedAt) {
-    const { data } = await supabase
-      .from('assignment_submissions')
-      .select('submitted_at')
-      .eq('assignment_id', a.id)
-      .eq('student_id', session.studentId)
-      .maybeSingle()
-    return !!(data?.submitted_at && data.submitted_at >= startedAt)
+    try {
+      const { data } = await supabase
+        .from('assignment_submissions')
+        .select('submitted_at')
+        .eq('assignment_id', a.id)
+        .eq('student_id', session.studentId)
+        .maybeSingle()
+      return !!(data?.submitted_at && data.submitted_at >= startedAt)
+    } catch {
+      return false
+    }
   }
 
   async function submit() {
@@ -1217,84 +1227,99 @@ function AssignmentCard({ a, session, onSubmitted }) {
     setGradingPending(false)
     const startedAt = new Date().toISOString()
 
-    for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt++) {
-      setRetryAttempt(attempt)
-      const form = new FormData()
-      form.append('file', file)
-      form.append('assignment_id', a.id)
-      form.append('student_id', session.studentId)
-      form.append('student_name', session.studentName)
-      form.append('class', session.class)
-      form.append('portion', a.portion || a.title || '')
-      form.append('folder', a.drive_folder_id || '')
-      form.append('worksheet', a.link || '')
-      form.append('assignment_name', a.title || '')
-      form.append('subject', a.subject || '')
+    try {
+      for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt++) {
+        setRetryAttempt(attempt)
+        const form = new FormData()
+        form.append('file', file)
+        form.append('assignment_id', a.id)
+        form.append('student_id', session.studentId)
+        form.append('student_name', session.studentName)
+        form.append('class', session.class)
+        form.append('portion', a.portion || a.title || '')
+        form.append('folder', a.drive_folder_id || '')
+        form.append('worksheet', a.link || '')
+        form.append('assignment_name', a.title || '')
+        form.append('subject', a.subject || '')
 
-      const { data, error: fnErr } = await supabase.functions.invoke('submit-worksheet', { body: form })
-      if (!fnErr && data?.ok !== false) {
-        setUploading(false)
-        setRetryAttempt(0)
-        setFile(null)
-        // Grading is still running server-side (see FAST_PATH_MS in
-        // submit-worksheet) — the file was received, just not graded yet,
-        // so leave the note up instead of the normal silent success.
-        if (data?.pending) setGradingPending(true)
-        onSubmitted()
-        return
-      }
-
-      // On a non-2xx response supabase-js sets `data` to null and buries the
-      // function's actual JSON error body (from submit-worksheet's fail())
-      // inside `error.context`, a raw Response — without reading it back out
-      // the student only ever sees a generic "non-2xx status code" message.
-      let message = data?.error
-      if (!message && fnErr?.context?.json) {
-        try { message = (await fnErr.context.json())?.error } catch { /* not JSON */ }
-      }
-      const isNetworkFailure = !message && fnErr?.message?.includes('Failed to send a request')
-
-      if (isNetworkFailure) {
-        // "Failed to send a request" only means the browser never got a
-        // response back — after a slow n8n grading call on a flaky mobile
-        // connection, the upload can easily have gone through and been
-        // recorded server-side even though this fetch() looks failed here.
-        // The server keeps working after the phone's connection drops, so
-        // poll for a while rather than checking once — otherwise a real
-        // submission looks like an error (or gets silently re-uploaded,
-        // re-triggering AI grading for nothing).
-        setVerifying(true)
-        let confirmed = await checkSubmitted(startedAt)
-        for (let poll = 0; !confirmed && poll < SUBMISSION_POLL_ATTEMPTS; poll++) {
-          await new Promise((r) => setTimeout(r, SUBMISSION_POLL_INTERVAL_MS))
-          confirmed = await checkSubmitted(startedAt)
+        let data, fnErr
+        try {
+          ;({ data, error: fnErr } = await supabase.functions.invoke('submit-worksheet', { body: form }))
+        } catch (thrown) {
+          fnErr = thrown
         }
-        setVerifying(false)
-        if (confirmed) {
+        if (!fnErr && data?.ok !== false) {
           setUploading(false)
           setRetryAttempt(0)
           setFile(null)
+          // Grading is still running server-side (see FAST_PATH_MS in
+          // submit-worksheet) — the file was received, just not graded yet,
+          // so leave the note up instead of the normal silent success.
+          if (data?.pending) setGradingPending(true)
           onSubmitted()
           return
         }
-        if (attempt < MAX_UPLOAD_ATTEMPTS) {
-          await new Promise((r) => setTimeout(r, attempt * 1500))
-          continue
-        }
-      }
 
+        // On a non-2xx response supabase-js sets `data` to null and buries the
+        // function's actual JSON error body (from submit-worksheet's fail())
+        // inside `error.context`, a raw Response — without reading it back out
+        // the student only ever sees a generic "non-2xx status code" message.
+        let message = data?.error
+        if (!message && fnErr?.context?.json) {
+          try { message = (await fnErr.context.json())?.error } catch { /* not JSON */ }
+        }
+        const isNetworkFailure = !message && fnErr?.message?.includes('Failed to send a request')
+
+        if (isNetworkFailure) {
+          // "Failed to send a request" only means the browser never got a
+          // response back — after a slow n8n grading call on a flaky mobile
+          // connection, the upload can easily have gone through and been
+          // recorded server-side even though this fetch() looks failed here.
+          // The server keeps working after the phone's connection drops, so
+          // poll for a while rather than checking once — otherwise a real
+          // submission looks like an error (or gets silently re-uploaded,
+          // re-triggering AI grading for nothing).
+          setVerifying(true)
+          let confirmed = await checkSubmitted(startedAt)
+          for (let poll = 0; !confirmed && poll < SUBMISSION_POLL_ATTEMPTS; poll++) {
+            await new Promise((r) => setTimeout(r, SUBMISSION_POLL_INTERVAL_MS))
+            confirmed = await checkSubmitted(startedAt)
+          }
+          setVerifying(false)
+          if (confirmed) {
+            setUploading(false)
+            setRetryAttempt(0)
+            setFile(null)
+            onSubmitted()
+            return
+          }
+          if (attempt < MAX_UPLOAD_ATTEMPTS) {
+            await new Promise((r) => setTimeout(r, attempt * 1500))
+            continue
+          }
+        }
+
+        setUploading(false)
+        setRetryAttempt(0)
+        setError(
+          isNetworkFailure
+            ? 'We could not upload your file due to a connection issue, even after retrying. Please check your internet connection and try again.'
+            // The edge function always returns a simple, student-friendly message
+            // (see submit-worksheet/index.ts) — fnErr.message is only ever shown
+            // here if the function crashed before it could respond at all, so
+            // this stays generic rather than surfacing raw technical text.
+            : (message || 'Something went wrong while submitting. Please try again, and let your teacher know if it keeps happening.')
+        )
+        return
+      }
+    } catch {
+      // Belt-and-braces: whatever unexpected thing just threw, don't leave
+      // the button stuck on "Checking…"/"Uploading…" forever — reset so the
+      // student can at least retry instead of being forced to reload.
+      setVerifying(false)
       setUploading(false)
       setRetryAttempt(0)
-      setError(
-        isNetworkFailure
-          ? 'We could not upload your file due to a connection issue, even after retrying. Please check your internet connection and try again.'
-          // The edge function always returns a simple, student-friendly message
-          // (see submit-worksheet/index.ts) — fnErr.message is only ever shown
-          // here if the function crashed before it could respond at all, so
-          // this stays generic rather than surfacing raw technical text.
-          : (message || 'Something went wrong while submitting. Please try again, and let your teacher know if it keeps happening.')
-      )
-      return
+      setError('Something went wrong while submitting. Please check your connection and try again.')
     }
   }
 
