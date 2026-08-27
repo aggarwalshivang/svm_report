@@ -4364,7 +4364,7 @@ function ModalTopicTable({ topics, type, countLabel = 'Tests' }) {
         </thead>
         <tbody className="divide-y divide-gray-50">
           {topics.map((t) => (
-            <tr key={t.topic} className={cfg.hover}>
+            <tr key={`${t.subject}-${t.topic}`} className={cfg.hover}>
               <td className="px-4 py-2 font-medium text-gray-800 text-xs">{t.topic}</td>
               <td className="px-4 py-2">
                 <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${t.subject === 'Science' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>{t.subject}</span>
