@@ -1206,7 +1206,16 @@ function AssignmentCard({ a, session, onSubmitted }) {
   // throw out of submit() uncaught used to leave the button stuck on
   // "Checking…" forever (uploading/verifying never got reset, and there was
   // no surrounding try/catch), with no way to recover short of a page reload.
-  async function checkSubmitted(startedAt) {
+  //
+  // Compares against `baseline` (the row's submitted_at, or null, read
+  // *before* this submit attempt started) rather than a client-clock
+  // timestamp — a real student hit this: their phone's clock was ahead of
+  // the server's, so `submitted_at >= startedAt` (client "now") never
+  // matched even though the upload landed in well under a second, and every
+  // poll for the full retry window kept coming back false. The submission
+  // was fine; only the verification was lying. Diffing two server-read
+  // values instead removes the client clock from the comparison entirely.
+  async function fetchSubmittedAt() {
     try {
       const { data } = await supabase
         .from('assignment_submissions')
@@ -1214,10 +1223,15 @@ function AssignmentCard({ a, session, onSubmitted }) {
         .eq('assignment_id', a.id)
         .eq('student_id', session.studentId)
         .maybeSingle()
-      return !!(data?.submitted_at && data.submitted_at >= startedAt)
+      return data?.submitted_at ?? null
     } catch {
-      return false
+      return null
     }
+  }
+
+  async function checkSubmitted(baseline) {
+    const current = await fetchSubmittedAt()
+    return !!(current && current !== baseline)
   }
 
   async function submit() {
@@ -1225,7 +1239,7 @@ function AssignmentCard({ a, session, onSubmitted }) {
     setUploading(true)
     setError('')
     setGradingPending(false)
-    const startedAt = new Date().toISOString()
+    const baseline = await fetchSubmittedAt()
 
     try {
       for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt++) {
@@ -1280,10 +1294,10 @@ function AssignmentCard({ a, session, onSubmitted }) {
           // submission looks like an error (or gets silently re-uploaded,
           // re-triggering AI grading for nothing).
           setVerifying(true)
-          let confirmed = await checkSubmitted(startedAt)
+          let confirmed = await checkSubmitted(baseline)
           for (let poll = 0; !confirmed && poll < SUBMISSION_POLL_ATTEMPTS; poll++) {
             await new Promise((r) => setTimeout(r, SUBMISSION_POLL_INTERVAL_MS))
-            confirmed = await checkSubmitted(startedAt)
+            confirmed = await checkSubmitted(baseline)
           }
           setVerifying(false)
           if (confirmed) {
