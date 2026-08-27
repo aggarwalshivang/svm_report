@@ -239,6 +239,9 @@ export default function TeacherDashboard() {
   const [n8nCopied, setN8nCopied] = useState(false)
   const [sendingList, setSendingList] = useState(null) // 'submitted' | 'unsubmitted' | null
   const [sendListResult, setSendListResult] = useState(null)
+  const [reminderSettings, setReminderSettings] = useState(null) // { lead_minutes, message_template } from public.worksheet_reminder_settings
+  const [reminderSettingsModalOpen, setReminderSettingsModalOpen] = useState(false)
+  const [savingReminderSettings, setSavingReminderSettings] = useState(false)
 
   useEffect(() => {
     // Supabase caps every select at 1000 rows by default — page through
@@ -263,18 +266,20 @@ export default function TeacherDashboard() {
     }
 
     async function load() {
-      const [{ data: studs }, { data: wr }, subs, wfb, allRows] = await Promise.all([
+      const [{ data: studs }, { data: wr }, subs, wfb, allRows, { data: rs }] = await Promise.all([
         supabase.from('student_emails').select('*').order('class').order('student_name'),
         supabase.from('worksheet_report').select('*').order('deadline'),
         fetchAll('assignment_submissions'),
         fetchAll('worksheet_feedback'),
         fetchAll('student_scores'),
+        supabase.from('worksheet_reminder_settings').select('*').eq('id', 1).maybeSingle(),
       ])
       setStudents(studs || [])
       setWorksheetReport(wr || [])
       setAssignmentSubmissions(subs)
       setWorksheetFeedback(wfb)
       setAllScores(allRows.map((r) => ({ ...r, subject: normalizeSubject(r.subject) })))
+      setReminderSettings(rs || null)
       setLoading(false)
     }
     load()
@@ -811,6 +816,23 @@ export default function TeacherDashboard() {
       setSendListResult({ status, success: false })
     }
     setSendingList(null)
+  }
+
+  async function saveReminderSettings(leadMinutes, messageTemplate) {
+    setSavingReminderSettings(true)
+    const { data, error } = await supabase
+      .from('worksheet_reminder_settings')
+      .update({ lead_minutes: leadMinutes, message_template: messageTemplate, updated_at: new Date().toISOString() })
+      .eq('id', 1)
+      .select('*')
+      .single()
+    setSavingReminderSettings(false)
+    if (error) {
+      alert(`Failed to save reminder settings: ${error.message}`)
+      return
+    }
+    setReminderSettings(data)
+    setReminderSettingsModalOpen(false)
   }
 
   async function addStudent() {
@@ -2104,6 +2126,13 @@ function ini(name) {
               >
                 {sendingList === 'unsubmitted' ? 'Sending…' : '❌ Send Unsubmitted List'}
               </button>
+              <button
+                onClick={() => setReminderSettingsModalOpen(true)}
+                className="inline-flex items-center gap-2 text-sm font-semibold px-4 py-2.5 rounded-lg transition"
+                style={{ background: 'rgba(200,134,10,0.1)', color: GOLD, border: '1px solid rgba(200,134,10,0.3)' }}
+              >
+                ⏰ Reminder Settings
+              </button>
               {sendListResult && (
                 <span className="text-xs font-medium" style={{ color: sendListResult.success ? '#16a34a' : '#dc2626' }}>
                   {sendListResult.success
@@ -2937,6 +2966,15 @@ function ini(name) {
         />
       )}
 
+      {reminderSettingsModalOpen && reminderSettings && (
+        <ReminderSettingsModal
+          settings={reminderSettings}
+          saving={savingReminderSettings}
+          onCancel={() => setReminderSettingsModalOpen(false)}
+          onSave={saveReminderSettings}
+        />
+      )}
+
       {editingTest && (
         <EditTestModal
           test={editingTest}
@@ -3051,6 +3089,96 @@ function MessageFormatModal({ format, onCancel, onSave }) {
               style={{ background: GOLD }}
             >
               Save Format
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const DEFAULT_REMINDER_MESSAGE = `Dear Students ,
+
+Kindly complete and submit your worksheets as early as possible.
+
+The list of students yet to submit will be shared at {{time}} today — try to finish before then.
+
+Thank you.`
+
+function ReminderSettingsModal({ settings, saving, onCancel, onSave }) {
+  const [leadMinutes, setLeadMinutes] = useState(String(settings.lead_minutes))
+  const [text, setText] = useState(settings.message_template)
+
+  const leadNum = Number(leadMinutes)
+  const validLead = Number.isFinite(leadNum) && leadNum > 0
+  const hoursLabel = validLead ? `${(leadNum / 60).toFixed(leadNum % 60 === 0 ? 0 : 1)}h` : '—'
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={saving ? undefined : onCancel}>
+      <div
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="text-lg font-bold text-gray-800 mb-1">Reminder Settings</h3>
+        <p className="text-sm text-gray-500 mb-4">
+          Controls the automatic WhatsApp reminder sent to each class's group before its worksheet deadlines.
+        </p>
+
+        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">
+          Send reminder this many minutes before the deadline
+        </label>
+        <div className="flex items-center gap-2 mb-4">
+          <input
+            type="number"
+            min="1"
+            value={leadMinutes}
+            onChange={(e) => setLeadMinutes(e.target.value)}
+            className="w-28 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-amber-200"
+          />
+          <span className="text-xs text-gray-400">minutes ({hoursLabel} before deadline)</span>
+        </div>
+
+        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">
+          Message
+        </label>
+        <p className="text-xs text-gray-400 mb-2">
+          Use{' '}
+          <span className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200" style={{ color: GOLD }}>
+            {'{{time}}'}
+          </span>{' '}
+          for the reminder's send time (e.g. "3:00 p.m.").
+        </p>
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          rows={10}
+          className="w-full bg-gray-50 border border-gray-200 rounded-lg p-4 whitespace-pre-wrap text-sm text-gray-800 font-mono mb-4 focus:outline-none focus:ring-2 focus:ring-amber-200"
+        />
+
+        <div className="flex gap-2 justify-between">
+          <button
+            onClick={() => { setLeadMinutes('60'); setText(DEFAULT_REMINDER_MESSAGE) }}
+            disabled={saving}
+            className="text-sm font-medium px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100 transition disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Reset to default
+          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={onCancel}
+              disabled={saving}
+              className="text-sm font-medium px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100 transition disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => onSave(leadNum, text)}
+              disabled={saving || !validLead || !text.trim() || !text.includes('{{time}}')}
+              title={!text.includes('{{time}}') ? 'Message must include {{time}}' : undefined}
+              className="text-sm font-semibold px-4 py-2 rounded-lg text-white transition disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{ background: GOLD }}
+            >
+              {saving ? 'Saving…' : 'Save Settings'}
             </button>
           </div>
         </div>
