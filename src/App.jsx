@@ -7,7 +7,25 @@ import TeacherDashboard from './pages/TeacherDashboard'
 
 function StudentRoute({ children }) {
   const session = JSON.parse(localStorage.getItem('svm_session') || 'null')
-  if (!session || session.role !== 'student') return <Navigate to="/" replace />
+  const validShape = !!session && session.role === 'student'
+  const [status, setStatus] = useState(validShape ? 'checking' : 'denied')
+
+  // svm_session survives indefinitely in localStorage, but the Supabase auth
+  // session it rides alongside can expire/get cleared independently. Every
+  // RLS-gated query below is scoped to the authenticated role, so a stale
+  // auth session doesn't error — it silently returns zero rows, rendering a
+  // dashboard that just looks empty. Verify the real session is still live
+  // before trusting the localStorage blob.
+  useEffect(() => {
+    if (!validShape) return
+    supabase.auth.getSession().then(({ data: { session: authSession } }) => {
+      if (!authSession) { localStorage.removeItem('svm_session'); setStatus('denied'); return }
+      setStatus('ok')
+    })
+  }, [validShape])
+
+  if (status === 'checking') return null
+  if (status === 'denied') return <Navigate to="/" replace state={{ expired: true }} />
   return children
 }
 

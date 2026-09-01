@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { ThemeToggle } from '../lib/theme.jsx'
 
@@ -11,6 +11,7 @@ const DARK = 'var(--page-bg)'
 
 export default function Login() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [role, setRole] = useState('student')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -165,6 +166,12 @@ export default function Login() {
           <h1 className="text-2xl font-bold" style={{ color: 'var(--text)' }}>Saraswati VidyaMandir</h1>
           <p className="text-sm mt-1" style={{ color: 'var(--faint)' }}>Student Report Portal</p>
         </div>
+
+        {location.state?.expired && (
+          <div className="rounded-lg px-4 py-3 text-sm mb-4" style={{ background: 'rgba(200,134,10,0.12)', border: '1px solid rgba(200,134,10,0.3)', color: 'var(--muted)' }}>
+            Your session expired — please log in again.
+          </div>
+        )}
 
         {/* Tabs */}
         <div className="flex mb-6" style={{ borderBottom: '1px solid rgba(200,134,10,0.2)' }}>
