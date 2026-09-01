@@ -540,6 +540,31 @@ export default function StudentDashboard() {
           ))}
         </div>
 
+        {/* ── UNSUBMITTED WORKSHEETS BANNER — always visible, regardless of tab ── */}
+        {missingCount > 0 && (
+          <div className="rounded-xl border px-4 py-3" style={{ borderColor: 'rgba(220,38,38,0.3)', background: 'rgba(220,38,38,0.06)' }}>
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <p className="text-sm font-semibold" style={{ color: '#dc2626' }}>
+                ⚠️ {missingCount} unsubmitted worksheet{missingCount === 1 ? '' : 's'}
+              </p>
+              <button
+                onClick={() => { setSection('assignments'); setAssignmentFilter('missing') }}
+                className="text-xs font-semibold px-3 py-1 rounded-lg text-white transition"
+                style={{ background: '#dc2626' }}
+              >
+                Submit now
+              </button>
+            </div>
+            <ul className="mt-2 space-y-1 text-xs" style={{ color: 'var(--muted)' }}>
+              {assignmentsWithStatus.filter((a) => a.status.key === 'missing').map((a) => (
+                <li key={a.id}>
+                  • {a.title} <span style={{ color: 'var(--faint)' }}>({a.subject})</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         {section === 'report' && (
         <>
         {/* ── SUMMARY ROW ── */}
