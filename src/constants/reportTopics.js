@@ -4,6 +4,12 @@
 // rows, which the Analysis/Chapter tabs group on as an exact-match key — "fixing"
 // the spelling here would make a topic's own history look like two different
 // chapters. Keep new selections byte-identical to old ones.
+//
+// Exception: Class 9 Maths "Introduction to Linear Polynomials" had a leading
+// space here that didn't match ~97% of its own stored history (a copy-paste
+// slip, not the n8n original) — it caused a mass duplicate-row incident
+// (student_scores exact-match ON CONFLICT/duplicate-check missed it), cleaned
+// up 2026-09-01. Corrected to match the dominant stored spelling.
 export const REPORT_TOPICS = {
   9: {
     Science: [
@@ -33,7 +39,7 @@ export const REPORT_TOPICS = {
     ],
     Maths: [
       'Orienting Yourself: The Use of Coordinates',
-      ' Introduction to Linear Polynomials',
+      'Introduction to Linear Polynomials',
       'The World of Numbers',
       'Exploring Algebraic Identities',
       'Introduction to Euclidâs Geometry',

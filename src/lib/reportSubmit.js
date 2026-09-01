@@ -34,7 +34,7 @@ export async function checkDuplicateTest({ classNum, subject, topic, examDate })
     .select('id')
     .eq('class', Number(classNum))
     .eq('subject', subject)
-    .eq('topic_name', topic)
+    .eq('topic_name', topic.trim())
     .eq('date', examDate)
   if (error) throw error
   return data?.length || 0
@@ -55,11 +55,16 @@ export function buildAndDownloadReportCsvs({ rows, subject, studentList, topic, 
 // Upserts on (student_id, class, subject, topic_name, date) — see
 // scripts/add-unique-key-to-student-scores.sql — so re-confirming the same
 // test (a retry, or pushing through the duplicate-test warning) updates the
-// existing row instead of piling on another copy.
+// existing row instead of piling on another copy. topic_name is trimmed
+// here (not just at selection time) because the ON CONFLICT match is exact
+// on the raw string — a single stray space anywhere upstream (a topic-list
+// typo, a script, a future entry point) silently defeats it and inserts a
+// true duplicate instead of updating. See reportTopics.js's 2026-09-01 note.
 export async function insertScoreRows(rows) {
+  const trimmedRows = rows.map((r) => ({ ...r, topic_name: r.topic_name.trim() }))
   const { data, error } = await supabase
     .from('student_scores')
-    .upsert(rows, { onConflict: 'student_id,class,subject,topic_name,date' })
+    .upsert(trimmedRows, { onConflict: 'student_id,class,subject,topic_name,date' })
     .select()
   if (error) throw error
   return data
