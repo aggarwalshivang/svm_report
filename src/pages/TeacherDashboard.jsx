@@ -159,6 +159,7 @@ export default function TeacherDashboard() {
   const [formatModalOpen, setFormatModalOpen] = useState(false)
   const [editingTest, setEditingTest] = useState(null)
   const [savingTestEdit, setSavingTestEdit] = useState(false)
+  const [viewingTest, setViewingTest] = useState(null)
   const [deletingTest, setDeletingTest] = useState(null)
   const [deletingTestKey, setDeletingTestKey] = useState(null)
   const [sentReports, setSentReports] = useState(() => {
@@ -753,6 +754,19 @@ export default function TeacherDashboard() {
     )))
     setSavingTestEdit(false)
     setEditingTest(null)
+  }
+
+  async function saveStudentScore(scoreId, newScoreObtained, newIsAbsent) {
+    const { error } = await supabase
+      .from('student_scores')
+      .update({ score_obtained: newIsAbsent ? 0 : newScoreObtained, is_absent: newIsAbsent })
+      .eq('id', scoreId)
+    if (!error) {
+      setAllScores((prev) => prev.map((r) => (
+        r.id === scoreId ? { ...r, score_obtained: newIsAbsent ? 0 : newScoreObtained, is_absent: newIsAbsent } : r
+      )))
+    }
+    return { error }
   }
 
   async function deleteTest(test) {
@@ -1916,7 +1930,7 @@ function ini(name) {
                     const isSending = sending === t.key
                     const result = sendResult?.key === t.key ? sendResult : null
                     return (
-                      <tr key={t.key} className="hover:bg-amber-50">
+                      <tr key={t.key} className="hover:bg-amber-50 cursor-pointer" onClick={() => setViewingTest(t)}>
                         <td className="px-2 py-3 text-center font-bold text-gray-400 text-xs">#{t.testNo}</td>
                         <td className="px-2 py-3 text-gray-600 text-xs whitespace-nowrap">{t.date}</td>
                         <td className="px-2 py-3">
@@ -1931,7 +1945,7 @@ function ini(name) {
                         <td className="px-2 py-3 text-center">
                           <span className={`font-semibold text-xs ${topCount > 0 ? 'text-green-600' : 'text-gray-400'}`}>{topCount}</span>
                         </td>
-                        <td className="px-2 py-3 text-center">
+                        <td className="px-2 py-3 text-center" onClick={(e) => e.stopPropagation()}>
                           <button
                             onClick={() => setEditingTest(t)}
                             title="Edit test"
@@ -1941,7 +1955,7 @@ function ini(name) {
                             ✏️
                           </button>
                         </td>
-                        <td className="px-2 py-3 text-center">
+                        <td className="px-2 py-3 text-center" onClick={(e) => e.stopPropagation()}>
                           <button
                             onClick={() => setDeletingTest(t)}
                             disabled={deletingTestKey === t.key}
@@ -1951,7 +1965,7 @@ function ini(name) {
                             {deletingTestKey === t.key ? '…' : '🗑️'}
                           </button>
                         </td>
-                        <td className="px-2 py-3 text-center">
+                        <td className="px-2 py-3 text-center" onClick={(e) => e.stopPropagation()}>
                           {isSending ? (
                             <span className="text-xs text-amber-600 font-medium">Sending…</span>
                           ) : result && !result.success ? (
@@ -2984,6 +2998,14 @@ function ini(name) {
         />
       )}
 
+      {viewingTest && (
+        <TestScoresModal
+          test={viewingTest}
+          onClose={() => setViewingTest(null)}
+          onSaveScore={saveStudentScore}
+        />
+      )}
+
       {deletingTest && (
         <ConfirmDeleteTestModal
           test={deletingTest}
@@ -3181,6 +3203,107 @@ function ReminderSettingsModal({ settings, saving, onCancel, onSave }) {
               {saving ? 'Saving…' : 'Save Settings'}
             </button>
           </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function TestScoresModal({ test, onClose, onSaveScore }) {
+  const [rows, setRows] = useState(() => test.scores
+    .slice()
+    .sort((a, b) => a.student_name.localeCompare(b.student_name))
+    .map((s) => ({
+      id: s.id,
+      student_name: s.student_name,
+      score_obtained: s.score_obtained,
+      is_absent: s.is_absent,
+      savedScore: s.score_obtained,
+      savedAbsent: s.is_absent,
+    })))
+  const [savingId, setSavingId] = useState(null)
+  const [error, setError] = useState('')
+
+  function updateRow(id, patch) {
+    setError('')
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)))
+  }
+
+  async function handleSave(row) {
+    const scoreNum = Number(row.score_obtained)
+    if (!row.is_absent && (!Number.isFinite(scoreNum) || scoreNum < 0 || scoreNum > test.total_marks)) {
+      setError(`${row.student_name}: score must be between 0 and ${test.total_marks}`)
+      return
+    }
+    setSavingId(row.id)
+    setError('')
+    const { error: err } = await onSaveScore(row.id, scoreNum, row.is_absent)
+    if (err) {
+      setError(`Failed to save ${row.student_name}: ${err.message}`)
+    } else {
+      setRows((prev) => prev.map((r) => (
+        r.id === row.id ? { ...r, savedScore: r.is_absent ? 0 : scoreNum, savedAbsent: r.is_absent } : r
+      )))
+    }
+    setSavingId(null)
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[85vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="p-6 pb-4 border-b border-gray-100">
+          <h3 className="text-lg font-bold text-gray-800">Test #{test.testNo} — Student Scores</h3>
+          <p className="text-sm text-gray-500 mt-1">{test.subject} · {test.topic} · Class {test.class} · Total {test.total_marks}</p>
+        </div>
+        <div className="overflow-y-auto px-6 py-4 flex-1">
+          {error && <p className="text-xs text-red-500 mb-3">{error}</p>}
+          <div className="space-y-2">
+            {rows.map((r) => {
+              const dirty = Number(r.score_obtained) !== r.savedScore || r.is_absent !== r.savedAbsent
+              return (
+                <div key={r.id} className="flex items-center gap-2 text-sm">
+                  <span className="flex-1 text-gray-700 truncate">{r.student_name}</span>
+                  <label className="flex items-center gap-1 text-xs text-gray-400 whitespace-nowrap">
+                    <input
+                      type="checkbox"
+                      checked={r.is_absent}
+                      onChange={(e) => updateRow(r.id, { is_absent: e.target.checked })}
+                    />
+                    Absent
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    max={test.total_marks}
+                    disabled={r.is_absent}
+                    value={r.is_absent ? '' : r.score_obtained}
+                    onChange={(e) => updateRow(r.id, { score_obtained: e.target.value })}
+                    className="w-16 border border-gray-200 rounded-lg px-2 py-1 text-sm text-center disabled:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                  />
+                  <span className="text-xs text-gray-400 w-14 whitespace-nowrap">/ {test.total_marks}</span>
+                  <button
+                    onClick={() => handleSave(r)}
+                    disabled={!dirty || savingId === r.id}
+                    className="text-xs font-semibold px-2 py-1 rounded-lg text-white transition disabled:opacity-30 disabled:cursor-not-allowed"
+                    style={{ background: GOLD }}
+                  >
+                    {savingId === r.id ? '…' : 'Save'}
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+        <div className="p-4 border-t border-gray-100 flex justify-end">
+          <button
+            onClick={onClose}
+            className="text-sm font-medium px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100 transition"
+          >
+            Close
+          </button>
         </div>
       </div>
     </div>
