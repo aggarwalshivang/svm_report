@@ -136,6 +136,23 @@ function formatIST(isoString) {
   })
 }
 
+const LOG_STATUS_LABELS = {
+  network_failure: 'Connection never confirmed',
+  server_error: 'n8n webhook error',
+  rejected_unreadable: 'Scan unreadable',
+  db_upsert_failed: 'DB write failed',
+  timeout_no_response: 'Grading timed out',
+  exception: 'Unexpected error',
+}
+
+function logStatusStyle(status) {
+  // Everything here is a failure, so this is severity-of-red rather than
+  // good/bad — amber for "the student just needs to retake the scan",
+  // red for anything that points at infrastructure.
+  if (status === 'rejected_unreadable') return { bg: 'rgba(217,119,6,0.12)', color: '#b45309' }
+  return { bg: 'rgba(239,68,68,0.12)', color: '#dc2626' }
+}
+
 export default function TeacherDashboard() {
   const navigate = useNavigate()
   const session = JSON.parse(localStorage.getItem('svm_session') || 'null')
@@ -244,6 +261,15 @@ export default function TeacherDashboard() {
   const [reminderSettingsModalOpen, setReminderSettingsModalOpen] = useState(false)
   const [savingReminderSettings, setSavingReminderSettings] = useState(false)
 
+  // Submission Logs tab state — worksheet_submission_logs is fetched lazily
+  // (only once the tab is first opened) since it's diagnostic data most
+  // sessions never need.
+  const [submissionLogs, setSubmissionLogs] = useState([])
+  const [logsLoaded, setLogsLoaded] = useState(false)
+  const [logsLoading, setLogsLoading] = useState(false)
+  const [logStatusFilter, setLogStatusFilter] = useState('All')
+  const [logSearch, setLogSearch] = useState('')
+
   useEffect(() => {
     // Supabase caps every select at 1000 rows by default — page through
     // `.range()` until a page comes back short. assignment_submissions and
@@ -285,6 +311,22 @@ export default function TeacherDashboard() {
     }
     load()
   }, [])
+
+  async function loadSubmissionLogs() {
+    setLogsLoading(true)
+    const { data, error } = await supabase
+      .from('worksheet_submission_logs')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(500)
+    if (!error) setSubmissionLogs(data || [])
+    setLogsLoaded(true)
+    setLogsLoading(false)
+  }
+
+  useEffect(() => {
+    if (view === 'logs' && !logsLoaded) Promise.resolve().then(loadSubmissionLogs)
+  }, [view, logsLoaded])
 
   async function logout() {
     await supabase.auth.signOut()
@@ -597,6 +639,22 @@ export default function TeacherDashboard() {
         return b.count - a.count || a.student.student_name.localeCompare(b.student.student_name)
       })
   }, [assignmentAnalysis, classFilter, search, notSubmittingMinCount, notSubmittingSort])
+
+  const assignmentTitleById = useMemo(() => {
+    const map = new Map()
+    worksheetReport.forEach((w) => map.set(w.id, w.title))
+    return map
+  }, [worksheetReport])
+
+  const filteredSubmissionLogs = useMemo(() => {
+    const term = logSearch.trim().toLowerCase()
+    return submissionLogs
+      .filter((l) => logStatusFilter === 'All' || l.status === logStatusFilter)
+      .filter((l) => !term
+        || l.student_name?.toLowerCase().includes(term)
+        || l.file_name?.toLowerCase().includes(term)
+        || l.error_message?.toLowerCase().includes(term))
+  }, [submissionLogs, logStatusFilter, logSearch])
 
   // Worksheet performance analysis — derived by text-mining assignment_feedback
   // (worksheets carry no marks/chapter tag of their own). Built on top of the
@@ -1297,6 +1355,7 @@ export default function TeacherDashboard() {
                 { k: 'assignments', label: 'Worksheets', icon: '📌' },
                 { k: 'worksheetInsights', label: 'Worksheet Performance', icon: '📈' },
                 { k: 'notSubmitting', label: 'Frequent Non-Submitters', icon: '⚠️' },
+                { k: 'logs', label: 'Submission Logs', icon: '🧾' },
                 { k: 'manage',   label: 'Other',    icon: '⚙️' },
               ].map(({ k, label, icon }) => (
                 <button
@@ -1319,7 +1378,7 @@ export default function TeacherDashboard() {
           <div className="flex-1 min-w-0 space-y-4">
 
             {/* Filter bar (no view toggle) */}
-            {view !== 'updateReport' && (
+            {view !== 'updateReport' && view !== 'logs' && (
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 px-3 py-2.5 flex flex-wrap gap-2 items-center">
               {/* Class filter */}
               {view !== 'assignments' && (
@@ -2458,6 +2517,104 @@ function ini(name) {
                         </td>
                       </tr>
                     ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Submission Logs tab ── */}
+        {view === 'logs' && (
+          <div className="bg-white rounded-xl shadow overflow-hidden">
+            <div className="px-5 py-3 border-b flex flex-wrap items-center gap-2" style={{ background: 'rgba(239,68,68,0.12)' }}>
+              <div className="flex-1 min-w-[200px]">
+                <p className="text-sm font-semibold" style={{ color: '#dc2626' }}>
+                  🧾 Worksheet Submission Failures ({filteredSubmissionLogs.length}{filteredSubmissionLogs.length !== submissionLogs.length ? ` of ${submissionLogs.length}` : ''})
+                </p>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  Every submit attempt that did not cleanly succeed — a connection that never confirmed, an n8n/server error, an unreadable scan, or a failed DB write. Most recent 500, newest first.
+                </p>
+              </div>
+              <select
+                value={logStatusFilter}
+                onChange={(e) => setLogStatusFilter(e.target.value)}
+                className="border border-gray-200 rounded-lg px-2.5 py-2 text-xs font-medium bg-white focus:outline-none"
+                style={{ color: 'var(--text)' }}
+              >
+                <option value="All">All statuses</option>
+                {Object.entries(LOG_STATUS_LABELS).map(([key, label]) => (
+                  <option key={key} value={key}>{label}</option>
+                ))}
+              </select>
+              <input
+                type="text"
+                placeholder="Search student, file, error…"
+                value={logSearch}
+                onChange={(e) => setLogSearch(e.target.value)}
+                className="border border-gray-200 rounded-lg px-3 py-2 text-xs bg-white focus:outline-none w-56"
+              />
+              <button
+                onClick={loadSubmissionLogs}
+                disabled={logsLoading}
+                className="text-xs font-semibold px-3 py-2 rounded-lg border transition disabled:opacity-50"
+                style={{ color: '#dc2626', borderColor: 'rgba(220,38,38,0.35)' }}
+              >
+                {logsLoading ? 'Refreshing…' : '↻ Refresh'}
+              </button>
+            </div>
+
+            {logsLoading && !logsLoaded ? (
+              <p className="text-sm text-gray-400 py-10 text-center">Loading…</p>
+            ) : filteredSubmissionLogs.length === 0 ? (
+              <p className="text-sm text-gray-400 py-10 text-center">
+                {submissionLogs.length === 0 ? 'No submission failures logged 🎉' : 'No logs match this filter.'}
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs uppercase tracking-wide" style={{ background: NAV, color: 'var(--faint)' }}>
+                      <th className="px-3 sm:px-5 py-3 whitespace-nowrap">Time</th>
+                      <th className="px-3 sm:px-5 py-3">Student</th>
+                      <th className="px-3 sm:px-5 py-3">Assignment</th>
+                      <th className="px-3 sm:px-5 py-3">File</th>
+                      <th className="px-3 sm:px-5 py-3 text-center">Attempt</th>
+                      <th className="px-3 sm:px-5 py-3">Source</th>
+                      <th className="px-3 sm:px-5 py-3">Status</th>
+                      <th className="px-3 sm:px-5 py-3">Details</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {filteredSubmissionLogs.map((l) => {
+                      const style = logStatusStyle(l.status)
+                      return (
+                        <tr key={l.id}>
+                          <td className="px-3 sm:px-5 py-3 whitespace-nowrap text-gray-500 text-xs">{formatIST(l.created_at)}</td>
+                          <td className="px-3 sm:px-5 py-3">
+                            <p className="font-medium text-gray-800">{l.student_name || '—'}</p>
+                            <p className="text-xs text-gray-400">{l.class ? `Class ${l.class}` : ''}{l.subject ? ` · ${l.subject}` : ''}</p>
+                          </td>
+                          <td className="px-3 sm:px-5 py-3 text-gray-600 text-xs max-w-[220px] truncate" title={assignmentTitleById.get(l.assignment_id) || l.assignment_id || ''}>
+                            {assignmentTitleById.get(l.assignment_id) || l.assignment_id || '—'}
+                          </td>
+                          <td className="px-3 sm:px-5 py-3 text-gray-500 text-xs">{l.file_name || '—'}</td>
+                          <td className="px-3 sm:px-5 py-3 text-center text-gray-500 text-xs">{l.attempt_number ?? '—'}</td>
+                          <td className="px-3 sm:px-5 py-3 text-gray-500 text-xs">{l.source === 'client' ? '📱 Client' : '🖥️ Server'}</td>
+                          <td className="px-3 sm:px-5 py-3">
+                            <span
+                              className="inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1 rounded-full whitespace-nowrap"
+                              style={{ background: style.bg, color: style.color }}
+                            >
+                              {LOG_STATUS_LABELS[l.status] || l.status}
+                            </span>
+                          </td>
+                          <td className="px-3 sm:px-5 py-3 text-gray-500 text-xs max-w-[280px] truncate" title={l.error_message || ''}>
+                            {l.error_message || '—'}
+                          </td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>

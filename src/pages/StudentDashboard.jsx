@@ -1259,6 +1259,26 @@ function AssignmentCard({ a, session, onSubmitted }) {
     return !!(current && current !== baseline)
   }
 
+  // Only for failures the edge function never had a chance to log itself —
+  // i.e. the browser never got a confirmed response back at all. Best-effort:
+  // never let a logging failure block resetting the submit UI.
+  async function logClientFailure(status, errorMessage, attemptNumber) {
+    try {
+      await supabase.from('worksheet_submission_logs').insert({
+        assignment_id: a.id,
+        student_id: session.studentId,
+        student_name: session.studentName,
+        class: session.class,
+        subject: a.subject || null,
+        file_name: file?.name ?? null,
+        attempt_number: attemptNumber,
+        source: 'client',
+        status,
+        error_message: errorMessage,
+      })
+    } catch { /* best-effort */ }
+  }
+
   async function submit() {
     if (!file) return
     setUploading(true)
@@ -1340,6 +1360,12 @@ function AssignmentCard({ a, session, onSubmitted }) {
 
         setUploading(false)
         setRetryAttempt(0)
+        if (isNetworkFailure) {
+          // The edge function never confirmed receipt across every retry —
+          // this is the one failure mode it can't log server-side, since it
+          // may never have been reached at all.
+          logClientFailure('network_failure', fnErr?.message || 'Failed to send a request', attempt)
+        }
         setError(
           isNetworkFailure
             ? 'We could not upload your file due to a connection issue, even after retrying. Please check your internet connection and try again.'
@@ -1351,13 +1377,14 @@ function AssignmentCard({ a, session, onSubmitted }) {
         )
         return
       }
-    } catch {
+    } catch (thrown) {
       // Belt-and-braces: whatever unexpected thing just threw, don't leave
       // the button stuck on "Checking…"/"Uploading…" forever — reset so the
       // student can at least retry instead of being forced to reload.
       setVerifying(false)
       setUploading(false)
       setRetryAttempt(0)
+      logClientFailure('exception', thrown?.message || String(thrown), retryAttempt || null)
       setError('Something went wrong while submitting. Please check your connection and try again.')
     }
   }

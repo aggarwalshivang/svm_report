@@ -142,10 +142,33 @@ Deno.serve(async (req) => {
 
     const formQueryParameters = new URLSearchParams({ portion, class: className, folder, worksheet })
 
+    // Best-effort: a failure to log a failure shouldn't itself become a
+    // student-facing error, so this never throws.
+    async function logFailure(status: string, errorMessage: string, detail?: Record<string, unknown>) {
+      try {
+        const { error } = await admin.from('worksheet_submission_logs').insert({
+          assignment_id: assignmentId || null,
+          student_id: studentId || null,
+          student_name: studentName || null,
+          class: className || null,
+          subject: subject || null,
+          file_name: file.name,
+          source: 'edge_function',
+          status,
+          error_message: errorMessage.slice(0, 2000),
+          detail: detail ?? null,
+        })
+        if (error) console.error('worksheet_submission_logs insert failed:', error)
+      } catch (err) {
+        console.error('worksheet_submission_logs insert threw:', err)
+      }
+    }
+
     async function gradeAndRecord(n8nResp: Response): Promise<GradeResult> {
       if (!n8nResp.ok) {
         const body = await n8nResp.text().catch(() => '')
         console.error(`n8n webhook rejected the upload (${n8nResp.status}): ${body.slice(0, 300)}`)
+        await logFailure('server_error', `n8n webhook returned ${n8nResp.status}`, { status: n8nResp.status, body: body.slice(0, 300) })
         return { status: 'error', message: 'We could not process your file right now. Please try again in a few minutes.' }
       }
 
@@ -153,6 +176,7 @@ Deno.serve(async (req) => {
       const feedbackText = extractFeedbackText(n8nBody)
 
       if (feedbackText && feedbackText.trim().toLowerCase() === 'no feedback') {
+        await logFailure('rejected_unreadable', 'n8n graded the file but could not read the scan ("no feedback")')
         return { status: 'rejected', message: 'We could not read your handwriting clearly from this scan. Please retake a clear, well-lit photo (or a straight scan) and submit again.' }
       }
 
@@ -170,6 +194,7 @@ Deno.serve(async (req) => {
         )
       if (upsertErr) {
         console.error('assignment_submissions upsert failed:', upsertErr)
+        await logFailure('db_upsert_failed', upsertErr.message, { table: 'assignment_submissions', code: upsertErr.code })
         return { status: 'error', message: 'We could not save your submission. Please try again in a moment. If this keeps happening, let your teacher know.' }
       }
 
@@ -194,6 +219,7 @@ Deno.serve(async (req) => {
           )
         if (feedbackErr) {
           console.error('worksheet_feedback upsert failed:', feedbackErr)
+          await logFailure('db_upsert_failed', feedbackErr.message, { table: 'worksheet_feedback', code: feedbackErr.code })
           return { status: 'error', message: 'We could not save your submission. Please try again in a moment. If this keeps happening, let your teacher know.' }
         }
       }
@@ -209,8 +235,13 @@ Deno.serve(async (req) => {
       signal: n8nController.signal,
     }).finally(() => clearTimeout(n8nTimeout))
 
-    const gradePromise: Promise<GradeResult> = n8nPromise.then(gradeAndRecord).catch((err) => {
-      const message = err instanceof Error && err.name === 'AbortError'
+    const gradePromise: Promise<GradeResult> = n8nPromise.then(gradeAndRecord).catch(async (err) => {
+      const isAbort = err instanceof Error && err.name === 'AbortError'
+      await logFailure(
+        isAbort ? 'timeout_no_response' : 'exception',
+        err instanceof Error ? err.message : String(err),
+      )
+      const message = isAbort
         ? 'This is taking longer than usual. Please wait a minute, then try submitting again.'
         : (err?.message || 'Something went wrong while submitting. Please try again.')
       console.error('n8n grading call failed:', err)
