@@ -5,6 +5,7 @@ import {
   BarChart, Bar, ResponsiveContainer, ComposedChart, Cell,
 } from 'recharts'
 import { supabase } from '../lib/supabase'
+import { invokeWithProgress } from '../lib/invokeWithProgress'
 import { normalizeTopicName, normalizeSubject } from '../lib/topicName'
 import { ThemeToggle } from '../lib/theme.jsx'
 import {
@@ -1198,9 +1199,25 @@ const MAX_UPLOAD_ATTEMPTS = 3
 const SUBMISSION_POLL_INTERVAL_MS = 4_000
 const SUBMISSION_POLL_ATTEMPTS = 10 // ~40s per dropped connection
 
+// The bar is split so it never sits at a number that looks finished while
+// the student is still waiting: sending the file fills 0–70%, and the
+// server-side grading that follows creeps 70–96%. Grading reports no
+// progress of its own (n8n hands back nothing until it's done), so that
+// second stretch is an asymptotic crawl — always moving, never reaching
+// 100% until the server actually answers.
+const UPLOAD_SHARE = 70
+const PROCESSING_CEILING = 96
+const PROCESSING_TICK_MS = 400
+
 function AssignmentCard({ a, session, onSubmitted }) {
   const [file, setFile] = useState(null)
   const [uploading, setUploading] = useState(false)
+  // Real byte-level progress for the whole submit, and which stage that
+  // number is describing ('uploading' | 'processing' | 'verifying'). A
+  // multi-MB scan over a school-phone connection takes long enough that a
+  // button reading "Uploading…" with nothing moving looks like a hung page.
+  const [progress, setProgress] = useState(0)
+  const [phase, setPhase] = useState('')
   const [retryAttempt, setRetryAttempt] = useState(0)
   const [verifying, setVerifying] = useState(false)
   const [error, setError] = useState('')
@@ -1215,10 +1232,24 @@ function AssignmentCard({ a, session, onSubmitted }) {
   // worksheet should block further submissions.
   const canTurnIn = !a.completed && !a.submissions_closed
 
+  // Grading gives no progress events, so the bar eases toward
+  // PROCESSING_CEILING rather than freezing at 70% — a bar that stops moving
+  // reads as a crashed page, and gets students re-submitting (and re-running
+  // AI grading) for a file that is already safely in.
+  useEffect(() => {
+    if (phase !== 'processing') return
+    const id = setInterval(() => {
+      setProgress((prev) => (prev >= PROCESSING_CEILING ? prev : prev + (PROCESSING_CEILING - prev) * 0.06))
+    }, PROCESSING_TICK_MS)
+    return () => clearInterval(id)
+  }, [phase])
+
   function pickFile(e) {
     const f = e.target.files?.[0] || null
     setError('')
     setGradingPending(false)
+    setProgress(0)
+    setPhase('')
     if (!f) { setFile(null); return }
     if (f.type !== 'application/pdf') { setError('Only PDF files are accepted. Please convert your file to PDF and try again.'); setFile(null); return }
     if (f.size > MAX_FILE_BYTES) { setError('This file is too large. Please upload a file smaller than 20 MB.'); setFile(null); return }
@@ -1284,11 +1315,16 @@ function AssignmentCard({ a, session, onSubmitted }) {
     setUploading(true)
     setError('')
     setGradingPending(false)
+    setProgress(0)
+    setPhase('uploading')
     const baseline = await fetchSubmittedAt()
 
     try {
       for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt++) {
         setRetryAttempt(attempt)
+        // A retry re-sends the whole file, so the bar restarts with it.
+        setProgress(0)
+        setPhase('uploading')
         const form = new FormData()
         form.append('file', file)
         form.append('assignment_id', a.id)
@@ -1303,11 +1339,22 @@ function AssignmentCard({ a, session, onSubmitted }) {
 
         let data, fnErr
         try {
-          ;({ data, error: fnErr } = await supabase.functions.invoke('submit-worksheet', { body: form }))
+          ;({ data, error: fnErr } = await invokeWithProgress('submit-worksheet', form, {
+            onUploadProgress: (loaded, total) => {
+              setProgress(Math.min(UPLOAD_SHARE, (loaded / total) * UPLOAD_SHARE))
+            },
+            // Every byte is out; whatever comes next is server-side grading.
+            onUploaded: () => {
+              setProgress(UPLOAD_SHARE)
+              setPhase('processing')
+            },
+          }))
         } catch (thrown) {
           fnErr = thrown
         }
         if (!fnErr && data?.ok !== false) {
+          setProgress(100)
+          setPhase('')
           setUploading(false)
           setRetryAttempt(0)
           setFile(null)
@@ -1339,6 +1386,7 @@ function AssignmentCard({ a, session, onSubmitted }) {
           // submission looks like an error (or gets silently re-uploaded,
           // re-triggering AI grading for nothing).
           setVerifying(true)
+          setPhase('verifying')
           let confirmed = await checkSubmitted(baseline)
           for (let poll = 0; !confirmed && poll < SUBMISSION_POLL_ATTEMPTS; poll++) {
             await new Promise((r) => setTimeout(r, SUBMISSION_POLL_INTERVAL_MS))
@@ -1346,6 +1394,8 @@ function AssignmentCard({ a, session, onSubmitted }) {
           }
           setVerifying(false)
           if (confirmed) {
+            setProgress(100)
+            setPhase('')
             setUploading(false)
             setRetryAttempt(0)
             setFile(null)
@@ -1360,6 +1410,8 @@ function AssignmentCard({ a, session, onSubmitted }) {
 
         setUploading(false)
         setRetryAttempt(0)
+        setProgress(0)
+        setPhase('')
         if (isNetworkFailure) {
           // The edge function never confirmed receipt across every retry —
           // this is the one failure mode it can't log server-side, since it
@@ -1384,6 +1436,8 @@ function AssignmentCard({ a, session, onSubmitted }) {
       setVerifying(false)
       setUploading(false)
       setRetryAttempt(0)
+      setProgress(0)
+      setPhase('')
       logClientFailure('exception', thrown?.message || String(thrown), retryAttempt || null)
       setError('Something went wrong while submitting. Please check your connection and try again.')
     }
@@ -1457,6 +1511,41 @@ function AssignmentCard({ a, session, onSubmitted }) {
                 ? 'Submit late'
                 : 'Submit'}
           </button>
+        </div>
+      )}
+      {uploading && (
+        <div className="min-w-0">
+          <div className="flex items-center justify-between gap-2 text-xs mb-1">
+            <span className="font-medium text-gray-600 truncate">
+              {phase === 'processing'
+                ? '🤖 Checking your work…'
+                : phase === 'verifying'
+                  ? '🔍 Confirming your submission…'
+                  : '📤 Uploading your PDF…'}
+            </span>
+            <span className="font-semibold tabular-nums flex-shrink-0" style={{ color: GOLD }}>
+              {Math.round(progress)}%
+            </span>
+          </div>
+          <div
+            className="h-1.5 w-full rounded-full bg-gray-100 overflow-hidden"
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(progress)}
+          >
+            <div
+              className="h-full rounded-full transition-all duration-300 ease-out"
+              style={{ width: `${Math.max(3, progress)}%`, background: GOLD }}
+            />
+          </div>
+          {phase !== 'verifying' && (
+            <p className="text-[11px] text-gray-400 mt-1">
+              {phase === 'processing'
+                ? 'Your file is in. Grading usually takes a few seconds.'
+                : 'Sending your file — please keep this page open.'}
+            </p>
+          )}
         </div>
       )}
       {uploading && verifying && (
