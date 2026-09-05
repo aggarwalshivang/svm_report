@@ -1221,6 +1221,10 @@ function AssignmentCard({ a, session, onSubmitted }) {
   const [retryAttempt, setRetryAttempt] = useState(0)
   const [verifying, setVerifying] = useState(false)
   const [error, setError] = useState('')
+  // Drives the transient "Submitted successfully!" checkmark banner — set on
+  // a confirmed success and cleared a few seconds later so it doesn't linger
+  // forever alongside the permanent "Submitted <file> · <date>" line below.
+  const [justSubmitted, setJustSubmitted] = useState(false)
   // Set when submit-worksheet hands grading off to the background instead
   // of waiting on a slow n8n call (see FAST_PATH_MS there) — the file was
   // received, it just isn't graded yet, so this isn't an error.
@@ -1244,9 +1248,18 @@ function AssignmentCard({ a, session, onSubmitted }) {
     return () => clearInterval(id)
   }, [phase])
 
+  // Auto-dismiss the success banner rather than leaving it up indefinitely —
+  // the permanent "Submitted <file> · <date>" line already covers that.
+  useEffect(() => {
+    if (!justSubmitted) return
+    const id = setTimeout(() => setJustSubmitted(false), 3000)
+    return () => clearTimeout(id)
+  }, [justSubmitted])
+
   function pickFile(e) {
     const f = e.target.files?.[0] || null
     setError('')
+    setJustSubmitted(false)
     setGradingPending(false)
     setProgress(0)
     setPhase('')
@@ -1314,6 +1327,7 @@ function AssignmentCard({ a, session, onSubmitted }) {
     if (!file) return
     setUploading(true)
     setError('')
+    setJustSubmitted(false)
     setGradingPending(false)
     setProgress(0)
     setPhase('uploading')
@@ -1362,6 +1376,7 @@ function AssignmentCard({ a, session, onSubmitted }) {
           // submit-worksheet) — the file was received, just not graded yet,
           // so leave the note up instead of the normal silent success.
           if (data?.pending) setGradingPending(true)
+          setJustSubmitted(true)
           onSubmitted()
           return
         }
@@ -1399,6 +1414,7 @@ function AssignmentCard({ a, session, onSubmitted }) {
             setUploading(false)
             setRetryAttempt(0)
             setFile(null)
+            setJustSubmitted(true)
             onSubmitted()
             return
           }
@@ -1481,6 +1497,26 @@ function AssignmentCard({ a, session, onSubmitted }) {
         </div>
       )}
 
+      {justSubmitted && (
+        <div
+          className="flex items-center gap-2 rounded-lg px-3 py-2 anim-pop-in"
+          style={{ border: '1px solid rgba(22,163,74,0.3)', background: 'rgba(22,163,74,0.1)' }}
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" className="flex-shrink-0">
+            <circle cx="12" cy="12" r="11" fill="#22c55e" fillOpacity="0.15" stroke="#22c55e" strokeWidth="1.5" />
+            <path
+              d="M7 12.5l3 3 7-7"
+              stroke="#22c55e"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="anim-check-path"
+            />
+          </svg>
+          <span className="text-sm font-semibold text-green-700">Submitted successfully!</span>
+        </div>
+      )}
+
       {a.submission && (
         <p className="text-xs text-gray-500">
           Submitted <span className="font-medium text-gray-700">{a.submission.file_name}</span> · {formatIST(a.submission.submitted_at)}
@@ -1558,7 +1594,21 @@ function AssignmentCard({ a, session, onSubmitted }) {
           ⚠️ Connection issue — retrying upload ({retryAttempt}/{MAX_UPLOAD_ATTEMPTS})…
         </p>
       )}
-      {error && <p className="text-xs text-red-500">{error}</p>}
+      {error && (
+        <div
+          className="flex items-start gap-2.5 rounded-lg px-3 py-3 anim-shake"
+          style={{ border: '1px solid rgba(239,68,68,0.35)', background: 'rgba(239,68,68,0.1)' }}
+        >
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" className="flex-shrink-0 anim-pop-in">
+            <circle cx="12" cy="12" r="11" fill="#ef4444" fillOpacity="0.15" stroke="#ef4444" strokeWidth="1.5" />
+            <path d="M8.5 8.5l7 7M15.5 8.5l-7 7" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round" />
+          </svg>
+          <div className="min-w-0">
+            <p className="text-sm font-bold text-red-600">Submission failed</p>
+            <p className="text-xs text-red-500 mt-0.5">{error}</p>
+          </div>
+        </div>
+      )}
       {gradingPending && (
         <p className="text-xs font-medium" style={{ color: GOLD }}>
           ⏳ Received! Grading is taking longer than usual — refresh in a minute to see your feedback.

@@ -108,6 +108,34 @@ select option {
   background-color: #fffaf3 !important;
 }
 
+/* ── Worksheet submit feedback animations ──
+   Success: a checkmark that pops in and draws itself.
+   Failure: a bigger, shaking banner — it needs to read as "this didn't
+   go through" at a glance, not blend in with the rest of the card. */
+@keyframes pop-in {
+  0%   { transform: scale(0.4); opacity: 0; }
+  60%  { transform: scale(1.08); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+@keyframes check-draw {
+  from { stroke-dashoffset: 24; }
+  to   { stroke-dashoffset: 0; }
+}
+@keyframes shake-x {
+  10%, 90% { transform: translateX(-1px); }
+  20%, 80% { transform: translateX(2px); }
+  30%, 50%, 70% { transform: translateX(-5px); }
+  40%, 60% { transform: translateX(5px); }
+}
+
+.anim-pop-in { animation: pop-in 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+.anim-check-path {
+  stroke-dasharray: 24;
+  stroke-dashoffset: 24;
+  animation: check-draw 0.3s 0.2s ease-out forwards;
+}
+.anim-shake { animation: shake-x 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97) both; }
+
 /* ── Thin gold scrollbar for table containers ── */
 .table-scroll {
   scrollbar-width: thin;

@@ -260,6 +260,9 @@ export default function TeacherDashboard() {
   const [reminderSettings, setReminderSettings] = useState(null) // { lead_minutes, message_template } from public.worksheet_reminder_settings
   const [reminderSettingsModalOpen, setReminderSettingsModalOpen] = useState(false)
   const [savingReminderSettings, setSavingReminderSettings] = useState(false)
+  const [autoSendSettings, setAutoSendSettings] = useState(null) // { unsubmitted_enabled, submitted_enabled } from public.worksheet_auto_send_settings
+  const [autoSendSettingsModalOpen, setAutoSendSettingsModalOpen] = useState(false)
+  const [savingAutoSendSettings, setSavingAutoSendSettings] = useState(false)
 
   // Submission Logs tab state — worksheet_submission_logs is fetched lazily
   // (only once the tab is first opened) since it's diagnostic data most
@@ -293,13 +296,14 @@ export default function TeacherDashboard() {
     }
 
     async function load() {
-      const [{ data: studs }, { data: wr }, subs, wfb, allRows, { data: rs }] = await Promise.all([
+      const [{ data: studs }, { data: wr }, subs, wfb, allRows, { data: rs }, { data: ass }] = await Promise.all([
         supabase.from('student_emails').select('*').order('class').order('student_name'),
         supabase.from('worksheet_report').select('*').order('deadline'),
         fetchAll('assignment_submissions'),
         fetchAll('worksheet_feedback'),
         fetchAll('student_scores'),
         supabase.from('worksheet_reminder_settings').select('*').eq('id', 1).maybeSingle(),
+        supabase.from('worksheet_auto_send_settings').select('*').eq('id', 1).maybeSingle(),
       ])
       setStudents(studs || [])
       setWorksheetReport(wr || [])
@@ -307,6 +311,7 @@ export default function TeacherDashboard() {
       setWorksheetFeedback(wfb)
       setAllScores(allRows.map((r) => ({ ...r, subject: normalizeSubject(r.subject) })))
       setReminderSettings(rs || null)
+      setAutoSendSettings(ass || null)
       setLoading(false)
     }
     load()
@@ -873,17 +878,31 @@ export default function TeacherDashboard() {
     setSendingList(status)
     setSendListResult(null)
     try {
-      const res = await fetch(`https://n8n.saraswatividyamandir.com/webhook/list-student?status=${status}&type=${status}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          status,
-          type: status,
-          sender: session?.email || 'Teacher',
-          timestamp: new Date().toISOString(),
-        }),
-      })
-      setSendListResult({ status, success: res.ok })
+      if (status === 'unsubmitted') {
+        // Computed straight from assignments/student_emails/assignment_submissions
+        // (see send-worksheet-unsubmitted-whatsapp.sql) instead of the old
+        // gsheet-backed list-student webhook -- the RPC is the exact same
+        // function the automatic pre-deadline cron calls, so a manual click
+        // and the scheduled nudge always produce the same list.
+        // respect_toggle: false -- a teacher's explicit manual click should
+        // always go out, even while the automatic nudge is paused.
+        const { error } = await supabase.rpc('send_worksheet_unsubmitted_whatsapp', { respect_toggle: false })
+        setSendListResult({ status, success: !error })
+      } else {
+        // TODO: "Send Submitted List" still hits the old gsheet-backed
+        // webhook -- migrate this once the submitted-list webhook URL exists.
+        const res = await fetch(`https://n8n.saraswatividyamandir.com/webhook/list-student?status=${status}&type=${status}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            status,
+            type: status,
+            sender: session?.email || 'Teacher',
+            timestamp: new Date().toISOString(),
+          }),
+        })
+        setSendListResult({ status, success: res.ok })
+      }
     } catch {
       setSendListResult({ status, success: false })
     }
@@ -905,6 +924,23 @@ export default function TeacherDashboard() {
     }
     setReminderSettings(data)
     setReminderSettingsModalOpen(false)
+  }
+
+  async function saveAutoSendSettings(unsubmittedEnabled, submittedEnabled) {
+    setSavingAutoSendSettings(true)
+    const { data, error } = await supabase
+      .from('worksheet_auto_send_settings')
+      .update({ unsubmitted_enabled: unsubmittedEnabled, submitted_enabled: submittedEnabled, updated_at: new Date().toISOString() })
+      .eq('id', 1)
+      .select('*')
+      .single()
+    setSavingAutoSendSettings(false)
+    if (error) {
+      alert(`Failed to save automatic send settings: ${error.message}`)
+      return
+    }
+    setAutoSendSettings(data)
+    setAutoSendSettingsModalOpen(false)
   }
 
   async function addStudent() {
@@ -2206,6 +2242,13 @@ function ini(name) {
               >
                 ⏰ Reminder Settings
               </button>
+              <button
+                onClick={() => setAutoSendSettingsModalOpen(true)}
+                className="inline-flex items-center gap-2 text-sm font-semibold px-4 py-2.5 rounded-lg transition"
+                style={{ background: 'rgba(200,134,10,0.1)', color: GOLD, border: '1px solid rgba(200,134,10,0.3)' }}
+              >
+                🔁 Automatic Send Report
+              </button>
               {sendListResult && (
                 <span className="text-xs font-medium" style={{ color: sendListResult.success ? '#16a34a' : '#dc2626' }}>
                   {sendListResult.success
@@ -3146,6 +3189,15 @@ function ini(name) {
         />
       )}
 
+      {autoSendSettingsModalOpen && autoSendSettings && (
+        <AutoSendSettingsModal
+          settings={autoSendSettings}
+          saving={savingAutoSendSettings}
+          onCancel={() => setAutoSendSettingsModalOpen(false)}
+          onSave={saveAutoSendSettings}
+        />
+      )}
+
       {editingTest && (
         <EditTestModal
           test={editingTest}
@@ -3360,6 +3412,70 @@ function ReminderSettingsModal({ settings, saving, onCancel, onSave }) {
               {saving ? 'Saving…' : 'Save Settings'}
             </button>
           </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function AutoSendSettingsModal({ settings, saving, onCancel, onSave }) {
+  const [unsubmittedEnabled, setUnsubmittedEnabled] = useState(settings.unsubmitted_enabled)
+  const [submittedEnabled, setSubmittedEnabled] = useState(settings.submitted_enabled)
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={saving ? undefined : onCancel}>
+      <div
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="text-lg font-bold text-gray-800 mb-1">Automatic Send Report</h3>
+        <p className="text-sm text-gray-500 mb-4">
+          Controls the periodic WhatsApp nudge sent to each class's group while a worksheet is still open
+          (deadline not crossed yet) — daily at 3:00pm IST, plus an extra run at 12:00pm IST on
+          Saturday/Sunday. Doesn't affect the mandatory after-deadline unsubmitted list, which always sends
+          regardless of this setting.
+        </p>
+
+        <label className="flex items-center justify-between gap-3 py-3 border-t border-gray-100">
+          <span className="text-sm font-medium text-gray-700">❌ Unsubmitted list</span>
+          <input
+            type="checkbox"
+            checked={unsubmittedEnabled}
+            onChange={(e) => setUnsubmittedEnabled(e.target.checked)}
+            disabled={saving}
+            className="w-5 h-5 accent-amber-600"
+          />
+        </label>
+
+        <label className="flex items-center justify-between gap-3 py-3 border-t border-gray-100 opacity-50">
+          <span className="text-sm font-medium text-gray-700">
+            ✅ Submitted list
+            <span className="block text-xs font-normal text-gray-400">Not available yet — webhook not configured</span>
+          </span>
+          <input
+            type="checkbox"
+            checked={submittedEnabled}
+            disabled
+            className="w-5 h-5 accent-amber-600"
+          />
+        </label>
+
+        <div className="flex gap-2 justify-end mt-4 pt-3 border-t border-gray-100">
+          <button
+            onClick={onCancel}
+            disabled={saving}
+            className="text-sm font-medium px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100 transition disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => onSave(unsubmittedEnabled, submittedEnabled)}
+            disabled={saving}
+            className="text-sm font-semibold px-4 py-2 rounded-lg text-white transition disabled:opacity-40 disabled:cursor-not-allowed"
+            style={{ background: GOLD }}
+          >
+            {saving ? 'Saving…' : 'Save Settings'}
+          </button>
         </div>
       </div>
     </div>
